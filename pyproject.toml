@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modelingbench"
+version = "0.1.0"
+description = "Auditable iterative AI modeling harness for Blender"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "ModelingBench contributors"}]
+dependencies = []
+
+[project.scripts]
+modelbench = "modelbench.cli:main"
+modelbench-agent = "modelbench.agent_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["modelbench*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

@@ -1,0 +1,17 @@
+version = 1
+id = "checkpoint_cycles_aces_v1"
+blender_version = "5.1"
+engine = "CYCLES"
+device = "OPTIX"
+gpu_name = "NVIDIA GeForce RTX 3090"
+denoiser = "OPTIX"
+samples = 64
+resolution = 512
+resolution_percentage = 100
+output_format = "PNG"
+color_depth = 8
+view_transform = "ACES 2.0"
+display_device = "sRGB"
+background = "neutral"
+material = "neutral_gray"
+

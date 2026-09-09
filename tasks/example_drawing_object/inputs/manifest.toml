@@ -1,0 +1,9 @@
+version = 1
+[[inputs]]
+id = "orthographic_drawing"
+role = "drawing"
+use = "reference"
+path = "drawing.txt"
+view_classification = "orthographic"
+known_dimension = { name = "overall_height", value = 2.0, unit = "m" }
+confidence = 1.0

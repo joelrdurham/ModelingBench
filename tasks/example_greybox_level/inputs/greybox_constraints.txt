@@ -1,0 +1,2 @@
+Placeholder greybox constraints: provide a navigable path from spawn to goal inside the task bounds.
+This text file is intentionally not a valid .blend file.

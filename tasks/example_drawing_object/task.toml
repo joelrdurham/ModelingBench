@@ -1,0 +1,20 @@
+version = 1
+id = "example_drawing_object"
+title = "Example Drawing Object"
+
+[research]
+enabled = false
+
+[frame]
+unit_scale = 1.0
+up_axis = "+Z"
+front_axis = "-Y"
+evaluation_center = [0.0, 0.0, 0.0]
+bounds_min = [-1.0, -1.0, 0.0]
+bounds_max = [1.0, 1.0, 2.0]
+ground_plane = true
+
+[[anchors]]
+name = "base_center"
+position = [0.0, 0.0, 0.0]
+tolerance = 0.02

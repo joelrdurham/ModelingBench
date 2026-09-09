@@ -1,0 +1,20 @@
+version = 1
+adapter = "command"
+command = [
+  "codex", "exec",
+  "--sandbox", "workspace-write",
+  "--ephemeral",
+  "--json",
+  "--output-schema", "{result_schema}",
+  "--output-last-message", "{result_file}",
+  "-C", "{workspace}",
+  "-"
+]
+
+[limits]
+max_turns = 8
+max_checkpoints = 32
+wall_clock_seconds = 14400
+research_bytes = 1000000000
+blender_seconds = 3600
+

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modelingbench.local/schemas/checkpoint.schema.json",
+  "title": "ModelingBench Checkpoint v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "phase", "parent_checkpoint", "created_at", "artifact", "evidence_ids", "feedback_ids", "evaluation_views", "diagnostic_cameras", "observations", "preview_result"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^checkpoint_[0-9]{4}$"},
+    "phase": {"type": "string", "minLength": 1, "maxLength": 128},
+    "parent_checkpoint": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size", "sha256"],
+      "properties": {
+        "path": {"type": "string"},
+        "size": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      }
+    },
+    "evidence_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "feedback_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "evaluation_views": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+    "diagnostic_cameras": {"type": "array", "items": {"type": "object"}},
+    "observations": {"type": "object"},
+    "preview_result": {"type": "object"}
+  }
+}
+

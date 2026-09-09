@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modelingbench.local/schemas/evidence.schema.json",
+  "title": "ModelingBench Evidence Registry Entry v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "origin", "provided_input_id", "local_path", "sha256", "size", "original_url", "title", "source", "retrieved_at", "media_type", "view_classification", "known_dimension", "notes", "confidence"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^ev_[0-9]{4,}$"},
+    "origin": {"enum": ["provided", "agent_researched"]},
+    "provided_input_id": {"type": ["string", "null"]},
+    "local_path": {"type": "string", "minLength": 1},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "size": {"type": "integer", "minimum": 0},
+    "original_url": {"type": ["string", "null"]},
+    "title": {"type": "string", "minLength": 1},
+    "source": {"type": ["string", "null"]},
+    "retrieved_at": {"type": "string", "format": "date-time"},
+    "media_type": {"type": "string", "minLength": 1},
+    "view_classification": {"enum": ["orthographic", "perspective", "section", "plan", "unknown"]},
+    "known_dimension": {"type": ["object", "null"]},
+    "notes": {"type": ["string", "null"]},
+    "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+  }
+}
+

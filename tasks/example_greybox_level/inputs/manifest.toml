@@ -1,0 +1,6 @@
+version = 1
+[[inputs]]
+id = "greybox_constraints"
+role = "greybox"
+use = "editable_seed"
+path = "greybox_constraints.txt"

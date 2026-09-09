@@ -1,0 +1,6 @@
+version = 1
+[[inputs]]
+id = "reference_description"
+role = "reference_image"
+use = "reference"
+path = "reference.txt"

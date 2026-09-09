@@ -1,0 +1,33 @@
+version = 1
+id = "example_greybox_level"
+title = "Example Greybox Level"
+
+[research]
+enabled = false
+
+[frame]
+unit_scale = 1.0
+up_axis = "+Z"
+front_axis = "-Y"
+evaluation_center = [0.0, 0.0, 0.0]
+bounds_min = [-8.0, -8.0, 0.0]
+bounds_max = [8.0, 8.0, 4.0]
+ground_plane = true
+
+[[anchors]]
+name = "spawn"
+position = [0.0, -6.0, 0.0]
+tolerance = 0.1
+
+[[anchors]]
+name = "goal"
+position = [0.0, 6.0, 0.0]
+tolerance = 0.1
+
+[[dimensions]]
+name = "spawn_to_goal"
+from_anchor = "spawn"
+to_anchor = "goal"
+value = 12.0
+tolerance = 0.1
+unit = "m"

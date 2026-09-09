@@ -1,0 +1,2 @@
+Placeholder drawing constraints: create a centered, upright object within the task bounds.
+This text file is intentionally not a geometric drawing.

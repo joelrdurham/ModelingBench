@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modelingbench.local/schemas/feedback.schema.json",
+  "title": "ModelingBench Feedback Event v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "id", "message", "created_at"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "type": {"const": "feedback_submitted"},
+        "id": {"type": "string", "pattern": "^fb_[0-9]{4,}$"},
+        "message": {"type": "string", "minLength": 1},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "checkpoint_id", "feedback_ids", "created_at"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "type": {"const": "feedback_consumed"},
+        "checkpoint_id": {"type": "string", "pattern": "^checkpoint_[0-9]{4}$"},
+        "feedback_ids": {"type": "array", "items": {"type": "string", "pattern": "^fb_[0-9]{4,}$"}, "minItems": 1, "uniqueItems": true},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  ]
+}
+

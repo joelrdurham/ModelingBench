@@ -1,0 +1,11 @@
+version = 1
+adapter = "command"
+command = ["{python}", "{root}/tests/fixtures/fake_agent.py"]
+pass_env = ["MODELBENCH_FAKE_STATUS"]
+
+[limits]
+max_turns = 4
+max_checkpoints = 8
+wall_clock_seconds = 30
+research_bytes = 1000000
+blender_seconds = 30

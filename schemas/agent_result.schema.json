@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modelingbench.local/schemas/agent_result.schema.json",
+  "title": "ModelingBench Agent Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "blend_path", "phase", "reported_iterations", "feedback_requested", "notes"],
+  "properties": {
+    "status": {"enum": ["submitted", "checkpoint", "failed"]},
+    "blend_path": {"type": ["string", "null"]},
+    "phase": {"type": "string", "minLength": 1, "maxLength": 128},
+    "reported_iterations": {"type": ["integer", "null"], "minimum": 0},
+    "feedback_requested": {"type": "boolean"},
+    "notes": {"type": "string", "maxLength": 4000}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["submitted", "checkpoint"]}}},
+      "then": {"properties": {"blend_path": {"type": "string", "minLength": 1}}}
+    }
+  ]
+}
+

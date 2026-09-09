@@ -1,0 +1,2 @@
+Placeholder reference constraints: model a simple symmetric object with a stable base.
+This text file is intentionally not an image or a Blender scene.
