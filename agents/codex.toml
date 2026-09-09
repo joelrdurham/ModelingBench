@@ -1,7 +1,7 @@
 version = 1
 adapter = "command"
 command = [
-  "codex", "exec",
+  "C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", "codex", "exec",
   "--sandbox", "workspace-write",
   "--ephemeral",
   "--json",
@@ -17,4 +17,3 @@ max_checkpoints = 32
 wall_clock_seconds = 14400
 research_bytes = 1000000000
 blender_seconds = 3600
-

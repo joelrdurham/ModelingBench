@@ -12,12 +12,5 @@
     "reported_iterations": {"type": ["integer", "null"], "minimum": 0},
     "feedback_requested": {"type": "boolean"},
     "notes": {"type": "string", "maxLength": 4000}
-  },
-  "allOf": [
-    {
-      "if": {"properties": {"status": {"enum": ["submitted", "checkpoint"]}}},
-      "then": {"properties": {"blend_path": {"type": "string", "minLength": 1}}}
-    }
-  ]
+  }
 }
-

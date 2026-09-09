@@ -1,0 +1,13 @@
+version = 1
+
+[[inputs]]
+id = "mechanism_design_brief"
+role = "constraint"
+use = "constraint"
+path = "design_brief.txt"
+media_type = "text/plain"
+title = "Car trunk four-bar mechanism design brief"
+view_classification = "unknown"
+known_dimension = { name = "ground_link_length", value = 0.60531, unit = "m" }
+notes = "Concept demonstrator dimensions; not vehicle-specific or safety-certified."
+confidence = 1.0

@@ -99,6 +99,12 @@ def build_agent_prompt(run_dir: Path) -> str:
                 instructions.append(f"\n## Instruction: {path.relative_to(instructions_dir).as_posix()}\n{path.read_text(encoding='utf-8')}")
     latest = state.get("latest_checkpoint")
     pending = pending_feedback(run_dir)
+    metadata = read_json(run_dir / "run.json", {})
+    blender_executable = (
+        metadata.get("render_profiles", {}).get("final", {}).get("data", {}).get("blender_executable")
+        if isinstance(metadata, dict)
+        else None
+    )
     context = {
         "run_id": state["run_id"],
         "task_id": state["task_id"],
@@ -109,8 +115,9 @@ def build_agent_prompt(run_dir: Path) -> str:
         "latest_checkpoint": str(run_dir / "checkpoints" / latest / "model.blend") if latest else None,
         "pending_feedback": pending,
         "result_file": str(run_dir / "workspace" / "agent_result.json"),
-        "checkpoint_command": "modelbench-agent checkpoint --source <workspace .blend> --phase <label>",
-        "evidence_command": "modelbench-agent evidence --file <workspace file> [metadata]",
+        "blender_executable": blender_executable,
+        "checkpoint_command": f'"{os.sys.executable}" -m modelbench.agent_cli checkpoint --source <workspace .blend> --phase <label>',
+        "evidence_command": f'"{os.sys.executable}" -m modelbench.agent_cli evidence --file <workspace file> [metadata]',
     }
     return (
         "You are the modeling agent for a ModelingBench run. Work only inside the supplied workspace. "
@@ -157,6 +164,14 @@ def _agent_environment(
         "MODELBENCH_AGENT_TOKEN": token,
         "PYTHONPATH": str(root),
     })
+    metadata = read_json(run_dir / "run.json", {})
+    blender_executable = (
+        metadata.get("render_profiles", {}).get("final", {}).get("data", {}).get("blender_executable")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if isinstance(blender_executable, str) and blender_executable:
+        env["MODELBENCH_BLENDER"] = blender_executable
     return env
 
 
@@ -205,6 +220,8 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=False,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )

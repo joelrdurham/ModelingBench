@@ -1,0 +1,21 @@
+CONCEPTUAL CAR TRUNK FOUR-BAR HINGE
+
+Coordinate system: meters, +Z up, mechanism motion in the X-Z plane, thickness along Y.
+
+Fixed pivots:
+A = (-0.320, 0.000, 0.280) m
+B = ( 0.280, 0.000, 0.200) m
+
+Center-to-center link lengths:
+ground A-B = 0.60531 m
+input A-C = 0.44000 m
+lid coupler C-D = 0.58000 m
+follower B-D = 0.56000 m
+
+Use the upper circle-intersection assembly branch. Drive input angle A-C from 80 degrees
+at frame 1 (closed) to -10 degrees at frame 80 (open), solving C and D on every integer
+frame. The lid is rigidly attached to coupler C-D. Evaluation occurs at frame 63.
+
+Concept load case for proportioning only: 35 kg lid, 0.45 m CG arm, two hinges sharing
+load, approximately 77 N*m gravity moment per hinge before dynamic and slam factors.
+This benchmark is a visual and kinematic concept, not a production or safety-certified design.

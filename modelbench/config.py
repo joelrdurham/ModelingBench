@@ -139,6 +139,9 @@ def load_task(root: Path, task_id: str) -> TaskDefinition:
     ground = frame.get("ground_plane", False)
     if not isinstance(ground, bool):
         raise ValidationError("frame.ground_plane must be boolean")
+    evaluation_frame = frame.get("evaluation_frame", 1)
+    if isinstance(evaluation_frame, bool) or not isinstance(evaluation_frame, int) or evaluation_frame < 1:
+        raise ValidationError("frame.evaluation_frame must be a positive integer")
     anchors = config.get("anchors", [])
     if not isinstance(anchors, list):
         raise ValidationError("[[anchors]] must be an array of tables")

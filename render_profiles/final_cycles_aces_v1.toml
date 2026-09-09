@@ -1,6 +1,7 @@
 version = 1
 id = "final_cycles_aces_v1"
 blender_version = "5.1"
+blender_executable = 'C:\Program Files\Blender Foundation\Blender 5.1\blender.exe'
 engine = "CYCLES"
 device = "OPTIX"
 gpu_name = "NVIDIA GeForce RTX 3090"
@@ -14,4 +15,3 @@ view_transform = "ACES 2.0"
 display_device = "sRGB"
 background = "neutral"
 material = "neutral_gray"
-

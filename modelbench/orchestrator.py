@@ -184,6 +184,13 @@ def handle_result(root: Path, generated: Path, run_dir: Path, result: AgentResul
     state["reported_iterations"] = result.reported_iterations
     save_state(run_dir, state)
     run_name = f"{state['task_id']}/{state['run_id']}"
+    if state["state"] == "awaiting_feedback" and result.status in {"checkpoint", "submitted"}:
+        source = resolve_within(run_dir / "workspace", result.blend_path or "")
+        latest = state.get("latest_checkpoint")
+        checkpoint = run_dir / "checkpoints" / str(latest) / "model.blend"
+        if not latest or not source.is_file() or not checkpoint.is_file() or sha256_file(source) != sha256_file(checkpoint):
+            raise StateError("Agent result does not match the owned checkpoint at the pause boundary")
+        return {"run": run_name, "state": "awaiting_feedback"}
     if result.status == "failed":
         fail(run_dir, "agent", result.notes or "Agent reported failure")
         return {"run": run_name, "state": "failed"}
@@ -229,8 +236,22 @@ def continue_run(root: Path, identifier: str) -> dict[str, Any]:
     run_dir = resolve_run(generated, identifier)
     with OperationLock(generated, "continue", f"{run_dir.parents[1].name}/{run_dir.name}"):
         state = load_state(run_dir)
-        if state["state"] not in {"awaiting_feedback", "interrupted"}:
+        failure = state.get("failure") or {}
+        latest = state.get("latest_checkpoint")
+        recoverable_checkpoint_failure = bool(
+            state["state"] == "failed"
+            and failure.get("stage") == "orchestration"
+            and latest
+            and not state.get("artifact")
+            and (run_dir / "checkpoints" / str(latest) / "model.blend").is_file()
+        )
+        if state["state"] not in {"awaiting_feedback", "interrupted"} and not recoverable_checkpoint_failure:
             raise StateError(f"Run must be awaiting_feedback or interrupted, not {state['state']}")
+        if recoverable_checkpoint_failure:
+            state["failure"] = None
+            save_state(run_dir, state)
+            transition(run_dir, "awaiting_feedback", detail={"recovered_checkpoint": latest}, force=True)
+            state = load_state(run_dir)
         if state["state"] == "interrupted" and (state.get("failure") or {}).get("stage") == "evaluation":
             raise StateError("Evaluation-interrupted runs must use resume, not continue")
         control = read_json(run_dir / "control.json", {})

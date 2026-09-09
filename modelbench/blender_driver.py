@@ -387,6 +387,7 @@ def main(config: dict) -> dict:
     source_sha256 = _hash(source)
     _inspect_source(source)
     collection = _append_model(source)
+    bpy.context.scene.frame_set(int(task["frame"].get("evaluation_frame", 1)))
     inventory, geometry_min, geometry_max = _geometry_inventory(collection, task)
     gpu, scene = _strict_configuration(profile)
     scene.unit_settings.scale_length = float(task["frame"]["unit_scale"])

@@ -25,6 +25,9 @@ class TaskContractTests(unittest.TestCase):
         self.assertEqual([task.inputs[0].role for task in tasks], ["drawing", "reference_image", "greybox"])
         self.assertEqual(tasks[2].inputs[0].use, "editable_seed")
         self.assertTrue(tasks[1].research_enabled)
+        linkage = load_task(self.project.root, "car_trunk_four_bar")
+        self.assertEqual(linkage.frame["evaluation_frame"], 63)
+        self.assertEqual(linkage.inputs[0].role, "constraint")
 
     def test_render_profiles_are_strict(self):
         checkpoint = load_render_profile(self.project.root, "checkpoint_cycles_aces_v1")
@@ -33,6 +36,7 @@ class TaskContractTests(unittest.TestCase):
         self.assertEqual((final.data["samples"], final.data["resolution"]), (500, 1024))
         self.assertEqual(final.data["view_transform"], "ACES 2.0")
         self.assertEqual(final.data["gpu_name"], "NVIDIA GeForce RTX 3090")
+        self.assertEqual(final.data["blender_executable"], r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe")
 
     def test_task_rejects_path_escape(self):
         manifest = self.project.root / "tasks" / "example_reference_object" / "inputs" / "manifest.toml"
@@ -43,6 +47,8 @@ class TaskContractTests(unittest.TestCase):
     def test_json_schemas_parse(self):
         for path in (self.project.root / "schemas").glob("*.json"):
             self.assertTrue(json.loads(path.read_text(encoding="utf-8"))["$schema"].endswith("2020-12/schema"))
+        agent_result = json.loads((self.project.root / "schemas" / "agent_result.schema.json").read_text(encoding="utf-8"))
+        self.assertNotIn("allOf", agent_result)
 
     def test_agent_result_runtime_validation_matches_schema_limits(self):
         result = self.project.root / "agent_result.json"

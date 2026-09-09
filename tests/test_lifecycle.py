@@ -11,11 +11,12 @@ from modelbench.agent_cli import _context
 from modelbench.checkpoints import create_checkpoint
 from modelbench.errors import StateError, ValidationError
 from modelbench.feedback import add_feedback, pending_feedback
-from modelbench.orchestrator import continue_run, prepare_new_run, resume_evaluation, run_new
+from modelbench.adapter import AgentResult
+from modelbench.orchestrator import continue_run, handle_result, prepare_new_run, resume_evaluation, run_new
 from modelbench.project import ensure_generated_root
 from modelbench.reset import CONFIRMATION, reset_all
 from modelbench.runs import resolve_run, verify_run_snapshot
-from modelbench.state import load_state, save_state
+from modelbench.state import fail, load_state, save_state
 from modelbench.util import atomic_write_json, file_inventory, read_json, sha256_bytes
 from tests.helpers import TemporaryProject, fake_render, patched_rendering
 
@@ -83,6 +84,29 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(completed["state"], "promoted")
         state = load_state(resolve_run(ensure_generated_root(self.project.root), started["run"]))
         self.assertEqual(state["observed_turns"], 2)
+
+    def test_pause_boundary_owns_checkpoint_over_premature_submission(self):
+        run_dir, _ = prepare_new_run(self.project.root, "example_drawing_object", "fake_test")
+        workspace_model = run_dir / "workspace" / "working.blend"
+        workspace_model.write_bytes(b"fake blend")
+        control = read_json(run_dir / "control.json")
+        control["pause_requested"] = True
+        atomic_write_json(run_dir / "control.json", control)
+        create_checkpoint(self.project.root, run_dir, workspace_model, "review", views=["front"])
+        result = AgentResult("submitted", str(workspace_model), "final_candidate", 1, False, "premature")
+        handled = handle_result(self.project.root, ensure_generated_root(self.project.root), run_dir, result)
+        self.assertEqual(handled["state"], "awaiting_feedback")
+        self.assertIsNone(load_state(run_dir)["artifact"])
+
+    def test_continue_recovers_orchestration_failure_after_owned_checkpoint(self):
+        run_dir, _ = prepare_new_run(self.project.root, "example_drawing_object", "fake_test")
+        workspace_model = run_dir / "workspace" / "working.blend"
+        workspace_model.write_bytes(b"fake blend")
+        create_checkpoint(self.project.root, run_dir, workspace_model, "review", views=["front"])
+        fail(run_dir, "orchestration", "simulated post-checkpoint lifecycle fault")
+        completed = continue_run(self.project.root, "example_drawing_object/run_000001")
+        self.assertEqual(completed["state"], "promoted")
+        self.assertIsNone(load_state(run_dir)["failure"])
 
     def test_resume_uses_owned_artifact_without_agent(self):
         result = run_new(self.project.root, "example_drawing_object", "fake_test")
@@ -202,6 +226,7 @@ class LifecycleTests(unittest.TestCase):
             env = _agent_environment(self.project.root, run_dir, result_path, schema, profile, "token")
         self.assertNotIn("MODELBENCH_TEST_SECRET", env)
         self.assertEqual(env["MODELBENCH_AGENT_TOKEN"], "token")
+        self.assertEqual(env["MODELBENCH_BLENDER"], r"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe")
 
     def test_snapshot_tampering_blocks_sensitive_operations(self):
         run_dir, _ = prepare_new_run(self.project.root, "example_drawing_object", "fake_test")
