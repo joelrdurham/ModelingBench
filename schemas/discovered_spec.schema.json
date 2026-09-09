@@ -278,7 +278,11 @@
           },
           "case": {
             "type": "object",
-            "description": "Standalone reconstruction case_version=1.0, image_coordinates normalized top-left, camera, correspondences, constraints; annotations must include actual model-feature bindings for model evaluation."
+            "description": "Standalone reconstruction case_version=2.0 with owned image identity, pixel intrinsics, landmarks, observations and constraints; historical 1.0 cases use an explicit compatibility executor. Feature bindings are evaluated from MODEL geometry and independent from reconstruction residuals."
+          },
+          "hypothesis_id": {
+            "type": "string",
+            "description": "Audited selected valid camera hypothesis. Changes require a specification amendment."
           }
         }
       }

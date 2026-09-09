@@ -10,6 +10,11 @@ from .util import atomic_write_json, canonical_hash, file_inventory, read_json, 
 
 
 def solve_references(run_dir, spec, directory):
+    from .reconstruction_bridge import solve_references as execute_references
+    return execute_references(run_dir, spec, directory)
+
+
+def _legacy_solve_references(run_dir, spec, directory):
     from .discovery import evidence_inventory
     references = spec.get('references', [])
     if not references: return []
@@ -45,9 +50,8 @@ def solve_references(run_dir, spec, directory):
 
 
 def _validate_files(run_dir, records):
-    for record in records:
-        base = resolve_within(run_dir, record['path'])
-        if file_inventory(base) != record['files']: raise StateError('Reconstruction evidence changed')
+    from .reconstruction_bridge import validate_records
+    validate_records(run_dir, records)
 
 
 def render_reference(root, run_dir, artifact, output, reference, solution, task, budget_deadline=None):
@@ -62,6 +66,11 @@ def render_reference(root, run_dir, artifact, output, reference, solution, task,
         'output_dir': str(output), 'task': task, 'render_profile': profile,
         'reference': {'width': solution['size'][0], 'height': solution['size'][1], 'camera': solution['solution']['camera'],
             'bindings': reference.get('bindings', []), 'depth_exr': True}}
+    from .reconstruction_bridge import BRIDGE_VERSION
+    payload['reference_identity'] = {'bridge_version': BRIDGE_VERSION, 'artifact_sha256': payload['source_sha256'],
+        'reconstruction_receipt_sha256': solution.get('execution_receipt_sha256'),
+        'feature_binding_sha256': canonical_hash(reference.get('bindings', [])),
+        'selected_hypothesis': solution.get('selected_hypothesis'), 'camera_fixed': True}
     atomic_write_json(output / 'invocation.json', payload)
     try:
         result = subprocess.run([find_blender(profile), '--background', '--factory-startup', '--disable-autoexec', '--python', str(driver), '--', str(output / 'invocation.json')],
@@ -74,6 +83,7 @@ def render_reference(root, run_dir, artifact, output, reference, solution, task,
     value = read_json(output / 'result.json', {})
     if result.returncode or value.get('ok') is not True: raise BlenderError('Reference bridge failed: ' + str(value.get('error', result.returncode)))
     if value.get('source_sha256') != payload['source_sha256'] or sha256_file(artifact) != payload['source_sha256']: raise StateError('Reference render artifact changed')
+    value['reference_identity'] = payload['reference_identity']
     return value
 
 
@@ -166,12 +176,20 @@ def evaluate_references(root, run_dir, artifact, output, evaluation, budget_dead
         solution = by_id.get(ref['id'])
         requirements = [r for r in required if r['reference_id'] == ref['id']]
         folder = output / ('reference_' + str(refs.index(ref)+1).zfill(4))
+        supported = bool(solution and solution['status'] == 'solved' and solution['solution'].get('camera'))
+        checks.append({'id': 'reconstruction_support_' + ref['id'], 'requirement': 'Reconstruction supports ' + ref['id'],
+            'status': 'pass' if supported else 'unknown', 'assessment': 'assessed' if supported else 'unassessed',
+            'category': 'reconstruction_assumption', 'evidence_source': 'reconstruction', 'critical': any(r['critical'] for r in requirements),
+            'reconstruction_receipt_sha256': solution.get('execution_receipt_sha256') if solution else None})
         if not solution or solution['status'] != 'solved' or not evaluation.get('passed'):
-            fit = {'metrics': {}, 'reason': 'Unresolved reconstruction or failed geometric gate'}
+            fit = {'metrics': {}, 'assessment': 'unassessed', 'category': 'reconstruction_assumption' if not supported else 'model_geometry', 'reason': 'Unresolved reconstruction or failed geometric gate'}
         else:
             rendered = render_reference(root, run_dir, artifact, folder, ref, solution, effective_task(run_dir), budget_deadline)
             fit = measure_image_fit(ref, rendered, run_dir / solution['path'] / 'reference.png', folder)
-            if solution['solution'].get('rectification'):
+            fit['assessment'] = 'assessed'
+            fit['category'] = 'model_geometry'
+            fit['reference_identity'] = rendered.get('reference_identity')
+            if solution['solution'].get('rectification') and ref['case'].get('case_version') == '1.0':
                 rectified_compare(ref['case'], solution['solution']['rectification'], run_dir / solution['path'] / 'reference.png', Path(rendered['render']['rgba']), folder)
         for req in requirements:
             metric = req.get('check', {}).get('metric', 'point_rms_uncertainty'); actual = fit['metrics'].get(metric)
@@ -180,11 +198,16 @@ def evaluate_references(root, run_dir, artifact, output, evaluation, budget_dead
             passed = actual is not None and (actual >= threshold if metric == 'silhouette_iou' else actual <= threshold)
             checks.append({'id': req['id'], 'requirement': req['criterion'], 'status': 'pass' if passed else 'unknown' if actual is None else 'fail',
                 'expected': threshold, 'actual': actual, 'method': metric, 'critical': req['critical'], 'evidence_source': 'measured',
+                'category': 'model_geometry' if supported else 'reconstruction_assumption', 'check_kind': 'model_to_reference',
+                'assessment': 'assessed' if actual is not None else 'unassessed',
                 'specification_sha256': record['specification']['sha256']})
         results[ref['id']] = fit
     value = copy.deepcopy(evaluation); value['checks'].extend(checks)
     value['passed'] = value['passed'] and all(c['status'] == 'pass' for c in checks if c['critical'])
     value['reference_evaluator_sha256'] = sha256_file(Path(__file__))
+    from .reconstruction_bridge import evaluation_identity
+    value['reference_identity'] = evaluation_identity(run_dir, sha256_file(artifact), record, spec)
+    value['reference_cache_key'] = canonical_hash(value['reference_identity'])
     value['reference_fit'] = results; value['specification_sha256'] = record['specification']['sha256']
     atomic_write_json(output / 'evaluation.json', value)
     return value

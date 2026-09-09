@@ -23,20 +23,34 @@ def _matrix(rotation):
  if angle==0: return Matrix.Identity(3)
  axis=Vector(rotation)/angle; return Matrix.Rotation(angle,3,axis)
 def _camera(config):
- c=config['camera']; world_to_camera=c['world_to_camera']; R=_matrix(world_to_camera['rotation_vector']); t=Vector(world_to_camera.get('translation',[0.,0.,0.])) if c.get('model')=='perspective' else Vector((0.,0.,0.)); render_t=t if c.get('model')=='perspective' else Vector((0.,0.,100.))
+ c=config['camera']; world_to_camera=c['world_to_camera']; R=_matrix(world_to_camera['rotation_vector'])
+ v2=c.get('intrinsics',{}).get('units')=='pixels'
+ t=Vector(world_to_camera.get('translation',[0.,0.,0.])) if v2 or c.get('model')=='perspective' else Vector((0.,0.,0.))
+ render_t=t.copy()
+ if c.get('model')=='orthographic': render_t.z=max(100.,render_t.z)
+ scene=bpy.context.scene; width=int(config.get('width',scene.render.resolution_x)); height=int(config.get('height',scene.render.resolution_y))
+ if v2:
+  intr=c['intrinsics']; aspect=float(intr.get('aspect_ratio',1.)); fx=float(intr['focal_length'] if c['model']=='perspective' else intr['scale']); pp=intr['principal_point']; cx=float(pp[0]); cy=float(pp[1]); pixel_ratio=1./aspect
+  scene.render.pixel_aspect_x=max(1.,aspect); scene.render.pixel_aspect_y=max(1.,1./aspect)
+ else:
+  fx=float(c.get('focal_length',c.get('scale',1.)))*width; pp=c.get('principal_point',[.5,.5]); offset=c.get('image_offset',[0.,0.]); cx=(float(pp[0])+float(offset[0]))*width; cy=(float(pp[1])+float(offset[1]))*height; pixel_ratio=width/height
+  scene.render.pixel_aspect_x=1.; scene.render.pixel_aspect_y=pixel_ratio
  # Blender uses local -Z forward and +Y up. C converts source camera coordinates
  # (right, down, forward) into Blender camera coordinates (right, up, back).
  C=Matrix.Diagonal((1.,-1.,-1.)); world_to_blender=C@R; translation=C@render_t
  world_to_blender4=world_to_blender.to_4x4(); world_to_blender4.translation=translation
  data=bpy.data.cameras.new('MB_REFERENCE_CAMERA_DATA'); camera=bpy.data.objects.new('MB_REFERENCE_CAMERA',data); bpy.context.scene.collection.objects.link(camera); camera.matrix_world=world_to_blender4.inverted()
  data.type='ORTHO' if c.get('model')=='orthographic' else 'PERSP'
- if data.type=='ORTHO': data.ortho_scale=1.0/float(c['scale'])
- else: data.sensor_width=36.0; data.lens=float(c.get('focal_length',1.0))*data.sensor_width; pp=c.get('principal_point',[.5,.5]); data.shift_x=.5-float(pp[0]); data.shift_y=float(pp[1])-.5
+ data.sensor_fit='HORIZONTAL'; data.sensor_width=36.; data.shift_x=(width*.5-cx)/width; data.shift_y=(cy-height*.5)*pixel_ratio/width; data.clip_end=1e6
+ if data.type=='ORTHO': data.ortho_scale=width/fx
+ else: data.lens=fx/width*data.sensor_width
  return camera,R,t
 def _projection(point,R,t,c,width,height):
  q=R@point+t
  if c.get('model')=='perspective' and q.z<=0: return None,float(q.z)
- if c.get('model')=='orthographic':
+ if c.get('intrinsics',{}).get('units')=='pixels':
+  intr=c['intrinsics']; f=float(intr['focal_length'] if c['model']=='perspective' else intr['scale']); aspect=float(intr.get('aspect_ratio',1.)); pp=intr['principal_point']; divisor=q.z if c['model']=='perspective' else 1.; u=float(pp[0])+f*q.x/divisor; v=float(pp[1])+f*aspect*q.y/divisor
+ elif c.get('model')=='orthographic':
   scale=float(c['scale']); pp=c.get('principal_point',[.5,.5]); offset=c.get('image_offset',[0.,0.]); u=width*(scale*q.x+float(pp[0])+float(offset[0])); v=height*(scale*q.y+float(pp[1])+float(offset[1]))
  else:
   f=float(c['focal_length']); pp=c.get('principal_point',[.5,.5]); u=width*(f*q.x/q.z+float(pp[0])); v=height*(f*q.y/q.z+float(pp[1]))
@@ -55,9 +69,10 @@ def _binding_points(binding,model,depsgraph):
     if i<0 or i>=len(mesh.vertices): raise RuntimeError('vertex_index out of evaluated range for '+name)
     local=mesh.vertices[i].co
    elif 'local_point' in binding:
-    local=Vector(binding['local_point']); nearest=min(((_point.co-local).length for _point in mesh.vertices),default=math.inf)
+    requested=Vector(binding['local_point']); nearest_vertex=min(mesh.vertices,key=lambda vertex:(vertex.co-requested).length); nearest=(nearest_vertex.co-requested).length
     tolerance=float(binding.get('tolerance',1e-5))
     if nearest>tolerance: raise RuntimeError('local_point is not within tolerance of evaluated mesh for '+name)
+    local=nearest_vertex.co
    else: raise RuntimeError('binding needs vertex_index or local_point')
    result.append((inst.matrix_world@local,inst.object.name))
   finally: inst.object.to_mesh_clear()

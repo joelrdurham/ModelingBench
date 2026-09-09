@@ -268,6 +268,9 @@ def run_loop(root, generated, run_dir):
                 transition(run_dir, 'submitted', force=True)
             revision = review.current(run_dir)
             directory = run_dir / 'revisions' / revision['id']
+            if revision.get('evaluation') and revision.get('evaluation_receipt'):
+                from .reconstruction_bridge import assert_evaluation_compatible
+                assert_evaluation_compatible(run_dir, revision)
             if not revision['evaluation'] or not revision.get('evaluation_receipt'):
                 transition(run_dir, 'validating', force=True)
                 result = retry(run_dir, 'measurements', lambda _: evaluate(root, run_dir, review.integrity(run_dir), directory / 'measurements', **({'budget_deadline': budget_deadline} if budget_deadline is not None else {})))

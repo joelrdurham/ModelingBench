@@ -97,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
         spec = sub.add_parser(name, help='Validate or propose an independently audited specification amendment')
         spec.add_argument('--file', required=True)
         if name == 'propose-spec': spec.add_argument('--reason', required=True)
+    reconstruction = sub.add_parser('submit-reconstruction', help='Execute a case against owned evidence; approval requires a specification audit')
+    reconstruction.add_argument('--file', required=True)
+    reconstruction.add_argument('--evidence', required=True)
     return parser
 
 
@@ -104,7 +107,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         root, run_dir, workspace = _context()
-        if args.command in {'validate-spec', 'propose-spec'}:
+        if args.command == 'submit-reconstruction':
+            from .reconstruction_bridge import submit_case
+            result = submit_case(run_dir, _json_file_in_workspace(workspace, args.file, 'Reconstruction case'), args.evidence)
+        elif args.command in {'validate-spec', 'propose-spec'}:
             from .discovery import validate_spec, propose_amendment, evidence_inventory
             spec = _json_file_in_workspace(workspace, args.file, 'Specification')
             result = propose_amendment(run_dir, spec, args.reason) if args.command == 'propose-spec' else {'valid': bool(validate_spec(spec, {e['id'] for e in evidence_inventory(run_dir)}))}

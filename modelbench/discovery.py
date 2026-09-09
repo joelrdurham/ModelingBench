@@ -34,6 +34,7 @@ def summary(run_dir):
         audit = record.get('audit')
         result['active_audit'] = read_json(run_dir / audit['path'], {}) if isinstance(audit, dict) and isinstance(audit.get('path'), str) else value.get('last_audit')
         result['sources'] = record.get('sources', [])
+        result['reconstructions'] = record.get('reconstructions', [])
     return result
 
 def _text(value, label):
@@ -140,6 +141,11 @@ def validate_spec(spec, evidence_ids=None):
         for key in ('shape_confidence', 'identity_confidence'):
             if _number(ref.get(key), key) > 1: raise ValidationError('Confidence must be <= 1')
         if not isinstance(ref.get('case'), dict): raise ValidationError('Reference needs reconstruction case')
+        if ref['case'].get('case_version') == '2.0':
+            from .reconstruction import validate_case, ReconstructionError
+            try: validate_case(ref['case'])
+            except ReconstructionError as exc: raise ValidationError('Invalid reconstruction case: ' + str(exc)) from exc
+            if ref['case'].get('units') != 'm': raise ValidationError('Harness reconstruction coordinates must be meters in the model world frame')
         _text(ref.get('applicability'), 'Reference applicability')
         _ids(ref.get('bindings', []), 'reference binding')
         for binding in ref.get('bindings', []):
@@ -180,6 +186,12 @@ def active_record(run_dir):
     if audit.get('specification_sha256') != record['specification']['sha256'] or audit.get('decision') != 'APPROVE': raise StateError('Invalid specification approval receipt')
     from .reference import _validate_files
     _validate_files(run_dir, record.get('reconstructions', []))
+    if any(r.get('execution_receipt_sha256') for r in record.get('reconstructions', [])):
+        from .reconstruction_bridge import identities
+        bound = identities(record['reconstructions'])
+        contract = read_json(run_dir / record['contract']['path'])
+        if contract.get('approved_reconstructions') != bound or audit.get('reconstruction_evidence_sha256') != canonical_hash(bound):
+            raise StateError('Reconstruction receipts differ from the approved contract/audit')
     for source in record['sources']:
         if is_link(run_dir / source['local_path']): raise StateError('Approved source became a link')
         path = resolve_within(run_dir, source['local_path'])
@@ -208,7 +220,7 @@ def effective_task(run_dir):
         task['frame'] = framing['frame']
     return task
 
-def compile_contract(task, spec):
+def compile_contract(task, spec, reconstructions=None):
     result = copy.deepcopy(task)
     result['frame'] = {**default_frame(), **spec.get('frame', {})}
     result['verification'] = {'frames': [result['frame'].get('evaluation_frame', 1)], 'dimensions': [], 'materials': {
@@ -226,6 +238,9 @@ def compile_contract(task, spec):
         if req['method'] == 'extent': result['verification']['dimensions'].append({**req['check'], 'id': req['id'], 'kind': 'extent', 'requirement': req['criterion']})
         elif req['method'] == 'radial_instances': result['features']['repeated'].append({**req['check'], 'id': req['id'], 'kind': 'radial_instances'})
     result['discovered_requirements'] = spec['requirements']
+    from .reconstruction_bridge import identities
+    result['reference_requirements'] = [copy.deepcopy(r) for r in spec['requirements'] if r['method'] == 'reference']
+    result['approved_reconstructions'] = identities(reconstructions or [])
     return result
 
 def _object_schema(properties):
@@ -241,6 +256,7 @@ def audit_schema(independent=False):
     if independent:
         return _object_schema({'assessment': string, 'expected_coverage': {'type': 'array', 'items': string}, 'conflicts': {'type': 'array', 'items': string}, 'sources': proposal_schema()['properties']['sources']})
     return _object_schema({'specification_sha256': string, 'decision': {'type': 'string', 'enum': ['APPROVE', 'REVISE', 'NEEDS_INPUT']},
+        'reconstruction_evidence_sha256': string,
         'assessment': string, 'reviewed_requirements': {'type': 'array', 'items': string},
         'coverage_complete': {'type': 'boolean'}, 'identity_supported': {'type': 'boolean'},
         'inferences_reviewed': {'type': 'boolean'}, 'tolerances_reviewed': {'type': 'boolean'},
@@ -273,6 +289,20 @@ def approve(run_dir, spec, audit, specification_path, reconstructions=None):
     unknown = {c['id'] for c in spec['claims'] if c['kind'] == 'unknown'}
     if any(r['critical'] and unknown.intersection(r['claim_ids']) for r in spec['requirements']): raise ValidationError('Critical unknowns prevent specification approval')
     solved = {r['id']: r['status'] for r in reconstructions or []}
+    if reconstructions:
+        from .reconstruction_bridge import validate_records, identities
+        validate_records(run_dir, reconstructions)
+        if any(r.get('execution_receipt_sha256') for r in reconstructions) and audit.get('reconstruction_evidence_sha256') != canonical_hash(identities(reconstructions)):
+            raise ValidationError('Audit must bind the exact reconstruction execution receipts')
+        by_id = {r['id']: r for r in reconstructions}
+        for ref in spec.get('references', []):
+            rec = by_id.get(ref['id'])
+            if not rec: raise ValidationError('Reference is missing harness execution evidence')
+            if rec.get('execution_receipt_sha256'):
+                if rec.get('proposal_case_sha256') != canonical_hash(ref['case']) or rec.get('feature_binding_sha256') != canonical_hash(ref.get('bindings', [])):
+                    raise ValidationError('Reconstruction evidence does not match proposed case/bindings')
+                if ref.get('hypothesis_id') and ref['hypothesis_id'] != rec.get('selected_hypothesis'):
+                    raise ValidationError('Reconstruction hypothesis selection changed without an amendment')
     if any(r['critical'] and r['method'] == 'reference' and solved.get(r['reference_id']) != 'solved' for r in spec['requirements']):
         raise ValidationError('Critical reference criterion lacks an identifiable solved camera; revise assumptions or evidence')
     with lock(run_dir):
@@ -283,7 +313,7 @@ def approve(run_dir, spec, audit, specification_path, reconstructions=None):
         atomic_write_json(directory / 'specification.json', spec)
         if sha256_file(directory / 'specification.json') != digest: raise ValidationError('Proposal serialization changed')
         atomic_write_json(directory / 'audit.json', audit)
-        contract = compile_contract(read_json(run_dir / 'snapshot/task.json'), spec)
+        contract = compile_contract(read_json(run_dir / 'snapshot/task.json'), spec, reconstructions)
         contract['specification_sha256'] = digest
         atomic_write_json(directory / 'contract.json', contract)
         def receipt(name):
@@ -372,10 +402,12 @@ def ensure_specification(root, run_dir, builder_profile, verifier_profile, *, bu
     atomic_write_json(directory / 'research.json', proposal)
     from .reference import solve_references
     reconstructions = solve_references(run_dir, spec, directory / 'reconstructions')
+    from .reconstruction_bridge import identities
+    reconstruction_evidence_sha256 = canonical_hash(identities(reconstructions))
     stage(run_dir, 'specification_audit', 'running')
     audit = invoke(root, run_dir, verifier_profile, directory / 'audit',
         PROMPT + '\nAudit the proposal against your independent coverage assessment. Challenge omitted features, source/variant applicability, uncertainty inflation, open-surface exemptions and criteria that an incorrect model could pass. Never approve unsupported critical facts. Review every requirement. For new versions explain and scrutinize every weakening relative to the prior approved specification.\n' +
-        json.dumps({'context': context, 'independent': independent, 'specification': spec, 'specification_sha256': sha256_file(proposal_path), 'sources': evidence_inventory(run_dir), 'reconstructions': reconstructions}),
+        json.dumps({'context': context, 'independent': independent, 'specification': spec, 'specification_sha256': sha256_file(proposal_path), 'sources': evidence_inventory(run_dir), 'reconstructions': reconstructions, 'reconstruction_evidence_sha256': reconstruction_evidence_sha256}),
         images, output_schema=audit_schema(), budget_deadline=budget_deadline)
     atomic_write_json(directory / 'audit.json', audit)
     if audit.get('decision') == 'APPROVE':
@@ -397,6 +429,9 @@ def verify_requirements(run_dir, revision, result, *, publication=False):
     record = active_record(run_dir); digest = record['specification']['sha256']
     if revision.get('specification_sha256') != digest or result.get('specification_sha256') != digest: raise StateError('Evaluation is bound to a different specification')
     spec = active_spec(run_dir)
+    if spec.get('references'):
+        from .reconstruction_bridge import assert_evaluation_compatible
+        assert_evaluation_compatible(run_dir, revision)
     records = result.get('requirement_results', [])
     ids = _ids(records, 'requirement result')
     if ids != {r['id'] for r in spec['requirements']}: raise ValidationError('Independent audit must assess every discovered requirement')
@@ -413,6 +448,12 @@ def verify_requirements(run_dir, revision, result, *, publication=False):
             expected_ids = ({'geometry_' + e for e in req['entity_ids']} if req['method'] == 'geometry' else {req['id']})
             matching = [c for c in measured if c['id'] in expected_ids or (req['method'] == 'radial_instances' and c['id'].startswith('feature_' + req['id']))]
             if not matching or any(c['status'] != 'pass' for c in matching): raise ValidationError('Auditor cannot waive unavailable or failed measurement: ' + req['id'])
+            if req['method'] == 'reference' and any(r.get('execution_receipt_sha256') for r in record.get('reconstructions', [])):
+                if any(c.get('check_kind') != 'model_to_reference' or c.get('evidence_source') != 'measured' for c in matching):
+                    raise ValidationError('Reconstruction support cannot satisfy model-to-reference agreement')
+                support = next((c for c in measured if c['id'] == 'reconstruction_support_' + req['reference_id']), None)
+                if not support or support.get('status') != 'pass':
+                    raise ValidationError('Reference criterion has no intact approved reconstruction support')
             differences = [abs(c['actual'] - c['expected']) for c in matching if isinstance(c.get('actual'), (int,float)) and isinstance(c.get('expected'), (int,float))]
             item['deviation'] = max(differences, default=0.0)
     if publication and ledger(run_dir).get('pending_amendment'): raise StateError('Pending specification amendment prevents publication')
