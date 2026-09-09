@@ -101,7 +101,8 @@ DIAGNOSTIC_VIEWS = ('front', 'right', 'top', 'azimuth_045')
 
 
 def _expected_render_paths(run_dir, kind):
-    task = read_json(run_dir / 'acceptance.json', {}).get('task', {})
+    from .discovery import enabled as discovery_enabled, effective_task
+    task = effective_task(run_dir) if discovery_enabled(run_dir) else read_json(run_dir / 'acceptance.json', {}).get('task', {})
     views = STANDARD_VIEWS if kind == 'final' else DIAGNOSTIC_VIEWS
     standard = {f"{'orthographic' if view in STANDARD_VIEWS[:6] else 'turntable'}/{view}.png" for view in views}
     frames = [] if kind == 'final' else task.get('verification', {}).get('frames', [])
@@ -181,7 +182,8 @@ def render_stage(root, run_dir, revision, kind, *, budget_deadline=None):
             atomic_write_json(directory / 'blender_result.json', repaired)
         return repaired
     metadata = read_json(run_dir / 'run.json')
-    task = read_json(run_dir / 'snapshot/task.json')
+    from .discovery import effective_task
+    task = effective_task(run_dir)
     render_profile = load_toml(run_dir / ('snapshot/final_profile.toml' if kind == 'final' else 'snapshot/checkpoint_profile.toml'))
     def operation(attempt):
         attempts = list(directory.parent.glob('.' + kind + '-attempt-*'))
@@ -226,7 +228,14 @@ def run_loop(root, generated, run_dir):
             if controlled(run_dir):
                 break
             check_budget()
+            from .discovery import ensure_specification, enabled as discovery_enabled, active_record, ledger as discovery_ledger
+            needs_discovery = discovery_enabled(run_dir) and (not discovery_ledger(run_dir)['active'] or discovery_ledger(run_dir).get('pending_amendment'))
+            if needs_discovery and not retry(run_dir, 'discovery', lambda _: ensure_specification(root, run_dir, profile(run_dir, 'builder'), profile(run_dir, 'verifier'), budget_deadline=budget_deadline)):
+                continue
             value = review.load(run_dir)
+            if discovery_enabled(run_dir) and value['revisions'] and value['revisions'][-1].get('specification_sha256') != active_record(run_dir)['specification']['sha256']:
+                review.stage(run_dir, 'builder')
+                value = review.load(run_dir)
             owned = load_state(run_dir).get('artifact')
             if owned and (not value['revisions'] or value['revisions'][-1]['artifact'] != owned['path']):
                 from .util import resolve_within
@@ -262,6 +271,11 @@ def run_loop(root, generated, run_dir):
             if not revision['evaluation'] or not revision.get('evaluation_receipt'):
                 transition(run_dir, 'validating', force=True)
                 result = retry(run_dir, 'measurements', lambda _: evaluate(root, run_dir, review.integrity(run_dir), directory / 'measurements', **({'budget_deadline': budget_deadline} if budget_deadline is not None else {})))
+                from .discovery import freeze_framing
+                freeze_framing(run_dir, result)
+                from .reference import evaluate_references
+                result = evaluate_references(root, run_dir, review.integrity(run_dir), directory / 'reference', result, budget_deadline)
+                if (directory / 'reference').exists(): review.record_evidence(run_dir, directory / 'reference', 'reference')
                 review.record_evaluation(run_dir, result)
             review.record_supporting_evidence(run_dir)
             review.record_evidence(run_dir, directory / 'measurements', 'measurements')
@@ -292,6 +306,11 @@ def run_loop(root, generated, run_dir):
                 state = load_state(run_dir)
                 return {'run': f"{state['task_id']}/{state['run_id']}", 'state': 'completed', 'decision': 'BEST_AVAILABLE',
                         'selected_concept_id': exploration.get('selected_concept_id'), 'unresolved_findings': [t['id'] for t in value['tasks'] if t['status'] != 'verifier_resolved']}
+            if discovery_enabled(run_dir) and revision['verification'].get('decision') == 'BEST_AVAILABLE':
+                if not revision['verification'].get('stopping_reason'):
+                    raise StateError('BEST_AVAILABLE requires attempted remedies and remaining evidence gaps')
+                transition(run_dir, 'completed', detail={'decision': 'BEST_AVAILABLE'}, force=True)
+                return {'run': f"{load_state(run_dir)['task_id']}/{load_state(run_dir)['run_id']}", 'state': 'completed', 'decision': 'BEST_AVAILABLE', 'discovery': discovery_ledger(run_dir)}
             if revision['evaluation'].get('passed') and revision['verification']['verdict'] == 'pass' and revision['verification'].get('decision', 'ACCEPT') == 'ACCEPT' and all(t['status'] == 'verifier_resolved' for t in value['tasks']):
                 if controlled(run_dir): break
                 check_budget()
@@ -334,6 +353,12 @@ def run_loop(root, generated, run_dir):
                 selected = next((item for item in reversed(value['revisions']) if (item.get('design_iteration') or {}).get('concept_id') == exploration['selected_concept_id']), None)
                 if selected is not None:
                     shutil.copy2(run_dir / selected['artifact'], run_dir / 'workspace' / 'seed.blend')
+            if discovery_enabled(run_dir):
+                seed_id = discovery_ledger(run_dir).get('working_seed')
+                seed = next((r for r in value['revisions'] if r['id'] == seed_id), None)
+                if seed:
+                    review.integrity(run_dir, seed)
+                    shutil.copy2(run_dir / seed['artifact'], run_dir / 'workspace/seed.blend')
             review.stage(run_dir, 'builder')
     except BudgetExhausted:
         review.stage(run_dir, 'budget', 'incomplete', error='User budget exhausted')

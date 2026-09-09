@@ -1,0 +1,292 @@
+{
+  "title": "DiscoveredSpec",
+  "type": "object",
+  "required": [
+    "version",
+    "target",
+    "entities",
+    "claims",
+    "relationships",
+    "requirements",
+    "references"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "target": {
+      "type": "object",
+      "required": [
+        "identity",
+        "scope",
+        "status"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "established",
+            "uncertain"
+          ]
+        },
+        "variant": {
+          "type": "string"
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "modeled",
+          "representation",
+          "representation_reason",
+          "patterns"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "modeled": {
+            "type": "boolean"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "representation": {
+            "enum": [
+              "solid",
+              "thickened_shell",
+              "open_surface"
+            ]
+          },
+          "representation_reason": {
+            "type": "string"
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "statement",
+          "entity_ids",
+          "evidence_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "sourced",
+              "observed",
+              "derived",
+              "prior",
+              "assumption",
+              "unknown"
+            ]
+          },
+          "statement": {
+            "type": "string"
+          },
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_location": {
+            "type": "string"
+          },
+          "derivation": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "neighbor_constraints": {
+            "type": "string"
+          },
+          "alternatives": {
+            "type": "string"
+          },
+          "contradiction_test": {
+            "type": "string"
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "entity_ids",
+          "relationship"
+        ],
+        "properties": {
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "relationship": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "criterion",
+          "entity_ids",
+          "claim_ids",
+          "critical",
+          "method",
+          "acceptance",
+          "tolerance_reason"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "criterion": {
+            "type": "string"
+          },
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "method": {
+            "enum": [
+              "extent",
+              "radial_instances",
+              "geometry",
+              "visual",
+              "reference"
+            ]
+          },
+          "acceptance": {
+            "type": "string"
+          },
+          "tolerance_reason": {
+            "type": "string"
+          },
+          "comparison_tolerance": {
+            "type": "number",
+            "minimum": 0
+          },
+          "reference_id": {
+            "type": "string"
+          },
+          "check": {
+            "type": "object",
+            "description": "extent: axis 0/1/2, expected positive meters, tolerance meters. radial_instances: axis, count, patterns, center, base_radius, depth, depth_tolerance, spacing_tolerance. reference: metric and maximum (finite), bindings mapping to actual model entities."
+          }
+        }
+      }
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_id",
+          "shape_confidence",
+          "identity_confidence",
+          "applicability",
+          "case"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "evidence_id": {
+            "type": "string"
+          },
+          "shape_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "identity_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "applicability": {
+            "type": "string"
+          },
+          "case": {
+            "type": "object",
+            "description": "Standalone reconstruction case_version=1.0, image_coordinates normalized top-left, camera, correspondences, constraints; annotations must include actual model-feature bindings for model evaluation."
+          }
+        }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "description": "Optional audited frame. Default meters +Z up -Y front static frame1 auto_frame true. Fixed framing requires bounds_min/max and evaluation_center; framing is not dimensional acceptance."
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

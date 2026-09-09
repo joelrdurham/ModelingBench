@@ -255,6 +255,30 @@
     const tasks = run().review?.tasks || [], unresolved = tasks.filter(task => task.status !== 'verifier_resolved');
     const node = section('02', 'Findings & corrections', unresolved.length ? unresolved.length + ' items need attention. Open a finding to inspect its evidence and history.' : 'No unresolved corrections recorded.', 'ledger');
     if (unresolved.length) node.querySelector('.section-heading p').classList.add('attention');
+    const discoveryLedger = run().discovery;
+    const discovery = discoveryLedger?.specification;
+    if (discoveryLedger) {
+      const target = discovery?.target || {}, claims = discovery?.claims || [], entities = discovery?.entities || [], requirements = discovery?.requirements || [];
+      const panel = el('details', undefined, 'finding'); panel.open = true;
+      const active = discoveryLedger.active || 'not approved';
+      panel.append(el('summary', 'Discovered specification'), el('p', (target.identity || 'Target pending') + ' / ' + (target.status || discoveryLedger.stage || 'unknown')));
+      panel.append(el('p', 'Stage: ' + (discoveryLedger.stage || 'unknown') + '; active version: ' + active + '; versions: ' + (discoveryLedger.versions || []).length + '; working seed: ' + (discoveryLedger.working_seed || 'none')));
+      if (discoveryLedger.question) panel.append(el('p', 'Needs input: ' + discoveryLedger.question, 'attention'));
+      const rows = [
+        ['Entities', entities, value => value.name || value.id],
+        ['Requirements', requirements, value => (value.critical ? 'Critical: ' : '') + (value.criterion || value.id)],
+        ['Claims', claims, value => '[' + (value.kind || 'unknown') + '] ' + (value.statement || value.id)],
+        ['References', discovery?.references || [], value => value.applicability || value.id],
+        ['Candidate selection', discoveryLedger.candidates || [], value => (value.id || value.artifact || 'candidate') + (value.selected ? ' (selected)' : '')],
+      ];
+      for (const [name, values, describe] of rows) {
+        const detail = el('details'); detail.open = true; detail.append(el('summary', name + ' (' + values.length + ')'));
+        values.forEach(value => detail.append(el('p', describe(value)))); panel.append(detail);
+      }
+      const audit = discoveryLedger.last_audit;
+      if (audit) panel.append(el('p', 'Latest audit: ' + (audit.decision || 'recorded') + ' - ' + (audit.assessment || '')));
+      node.append(panel);
+    }
     const appendTask = (target, task) => {
       const detail = el('details', undefined, 'finding');
       if (task.status !== 'verifier_resolved') detail.classList.add('unresolved');
@@ -304,25 +328,38 @@
     const logs = el('details'); logs.append(el('summary', 'Technical logs & full ledger'), el('pre', JSON.stringify({models: record.models, review: record.review, workers: state.data.workers}, null, 2))); node.append(logs);
     parent.append(node);
   }
+  async function upload(file) {
+    const data = await new Promise((resolve, reject) => {const reader = new FileReader(); reader.onerror = () => reject(Error('Could not read reference')); reader.onload = () => resolve(String(reader.result).split(',', 2)[1]); reader.readAsDataURL(file);});
+    const response = await fetch('/api/upload', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-ModelBench-Action': token}, body: JSON.stringify({media_type: file.type, data})});
+    const result = await response.json(); if (!response.ok) throw Error(result.error || 'Upload failed'); return result.id;
+  }
   function start(parent) {
-    const node = section('NEW', 'Start a new run', 'Choose a task and its agents to begin a separate modeling run.', 'new-run');
+    const node = section('NEW', 'Start a new run', 'Run an existing task or create a sparse brief with optional reference files.', 'new-run');
     const form = el('form', undefined, 'start-form');
+    const mode = select('Run type', [{value: 'existing', text: 'Existing task'}, {value: 'brief', text: 'Brief'}], 'existing', () => update());
     const task = select('Task', state.data.tasks || [], '', () => {});
+    const brief = document.createElement('textarea'); brief.required = true; brief.maxLength = 16000; brief.placeholder = 'Describe the asset and intended result';
+    const notes = document.createElement('textarea'); notes.maxLength = 16000; notes.placeholder = 'Optional context, constraints, or questions';
+    const files = document.createElement('input'); files.type = 'file'; files.multiple = true; files.accept = '.png,.jpg,.jpeg,.webp,.pdf,.txt,image/png,image/jpeg,image/webp,application/pdf,text/plain';
+    const research = select('Research mode', ['live', 'offline'], 'live', () => {});
     const agent = el('input'); agent.value = 'codex'; agent.required = true;
     const verifier = el('input'); verifier.value = 'codex'; verifier.required = true;
     const efforts = [{value: '', text: 'Agent default'}, 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-    const builderEffort = select('Builder effort', efforts, '', () => {});
-    const verifierEffort = select('Verifier effort', efforts, '', () => {});
-    const submit = el('button', 'Start run', 'primary'); submit.type = 'submit'; submit.disabled = !state.data.tasks?.length;
-    form.append(field('Task', task), field('Builder agent', agent), field('Builder effort', builderEffort), field('Verifier agent', verifier), field('Verifier effort', verifierEffort), submit);
-    form.onsubmit = async event => {
-      event.preventDefault(); submit.disabled = true;
-      const request = {action: 'run', task: task.value, agent: agent.value, verifier: verifier.value};
-      if (builderEffort.value) request.builder_effort = builderEffort.value;
-      if (verifierEffort.value) request.verifier_effort = verifierEffort.value;
-      try {await action(request); fail('Run start requested. Switch to Review runs and refresh to see progress.', true);}
-      catch (error) {fail(error.message);} finally {submit.disabled = false;}
-    };
+    const builderEffort = select('Builder effort', efforts, '', () => {}), verifierEffort = select('Verifier effort', efforts, '', () => {});
+    const budget = el('input'); budget.type = 'number'; budget.min = '1'; budget.max = '86400'; budget.step = '1'; budget.placeholder = 'Optional seconds';
+    const submit = el('button', 'Start run', 'primary'); submit.type = 'submit';
+    const existingFields = [field('Task', task)], briefFields = [field('Brief', brief), field('Notes', notes), field('Reference files', files), field('Research mode', research)];
+    const shared = [field('Builder agent', agent), field('Builder effort', builderEffort), field('Verifier agent', verifier), field('Verifier effort', verifierEffort), field('Budget seconds', budget), submit];
+    form.append(field('Run type', mode), ...existingFields, ...briefFields, ...shared);
+    function update() { const isBrief = mode.value === 'brief'; existingFields.forEach(item => item.hidden = isBrief); briefFields.forEach(item => item.hidden = !isBrief); brief.required = isBrief; submit.disabled = !isBrief && !state.data.tasks?.length; submit.textContent = isBrief ? 'Create brief and start run' : 'Start run'; } update();
+    form.onsubmit = async event => { event.preventDefault(); submit.disabled = true; try {
+      let request;
+      if (mode.value === 'brief') { const selected = [...files.files]; if (selected.length > 16) throw Error('Choose at most 16 reference files'); const references = []; for (const file of selected) { if (!['image/png','image/jpeg','image/webp','application/pdf','text/plain'].includes(file.type)) throw Error('References must be PNG, JPEG, WebP, PDF, or text'); references.push(await upload(file)); } request = {action: 'brief-run', brief: brief.value, notes: notes.value, references, research_mode: research.value, agent: agent.value, verifier: verifier.value}; }
+      else request = {action: 'run', task: task.value, agent: agent.value, verifier: verifier.value};
+      if (builderEffort.value) request.builder_effort = builderEffort.value; if (verifierEffort.value) request.verifier_effort = verifierEffort.value;
+      if (budget.value) request.budget_seconds = Number(budget.value);
+      await action(request); fail('Run start requested. Switch to Review runs and refresh to see progress.', true);
+    } catch (error) {fail(error.message);} finally {update();} };
     node.append(form); parent.append(node);
   }
   function render() {
@@ -345,14 +382,17 @@
     const record = run(), summary = el('div', undefined, 'run-summary');
     const unresolved = (record.review?.tasks || []).filter(task => task.status !== 'verifier_resolved').length;
     summary.append(el('b', label(record.state), 'status-tag'), el('strong', unresolved + ' unresolved corrections', unresolved ? 'attention' : 'muted'));
-    for (const invocation of (record.models?.invocations || []).filter(item => !item.finished_at)) summary.append(el('small', 'Running now: ' + invocation.role + ' / ' + invocation.requested_model + ' / ' + invocation.requested_effort + ' effort', 'muted'));
+    for (const invocation of (record.models?.invocations || []).filter(item => !item.finished_at)) {
+      const activity = invocation.last_output_at || invocation.heartbeat_at || invocation.requested_at;
+      summary.append(el('small', 'Running now: ' + invocation.role + ' / ' + invocation.requested_model + ' / ' + invocation.requested_effort + ' effort' + (activity ? ' | activity ' + new Date(activity).toLocaleTimeString() : ''), 'muted'));
+    }
     app.append(summary); viewer(app); ledger(app); controls(app); updateImages();
   }
   async function refresh() {
     try {
       const response = await fetch('/api/status', {cache: 'no-store'}), data = await response.json();
       if (!response.ok) throw Error(data.error || 'Status unavailable');
-      state.data = {...data, runs: [...data.runs].sort((a, b) => (b.updated_at || b.run).localeCompare(a.updated_at || a.run))}; render();
+      state.data = {...data, runs: [...data.runs].sort((a, b) => (b.activity_at || b.updated_at || b.run).localeCompare(a.activity_at || a.updated_at || a.run))}; render();
     } catch (error) {fail(error.message);}
   }
   document.querySelector('#refresh').onclick = refresh;

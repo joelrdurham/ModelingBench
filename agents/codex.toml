@@ -5,6 +5,12 @@ command = [
   "--approve-for-me",
   "--ephemeral",
   "--ignore-user-config",
+  "--config", "web_search=live",
+  "--config", "project_doc_max_bytes=0",
+  "--enable", "skip_host_skill_discovery",
+  "--disable", "plugins",
+  "--disable", "apps",
+  "--disable", "memories",
   "--skip-git-repo-check",
   "--json",
   "--output-schema", "{result_schema}",
@@ -29,3 +35,8 @@ allowed_models = { "gpt-6-astra" = ["low", "medium", "high", "xhigh", "max", "ul
 wall_clock_seconds = 14400
 research_bytes = 1000000000
 blender_seconds = 3600
+
+[capabilities]
+image_inspection = true
+research = true
+offline = false

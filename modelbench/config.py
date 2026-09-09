@@ -300,7 +300,7 @@ def load_task(root: Path, task_id: str) -> TaskDefinition:
     for entry in entries:
         if not isinstance(entry, dict):
             raise ValidationError("Each input must be a table")
-        unknown = set(entry) - {"id", "role", "use", "path", "media_type", "title", "source_url", "view_classification", "known_dimension", "notes", "confidence"}
+        unknown = set(entry) - {"id", "role", "use", "path", "media_type", "title", "source_url", "view_classification", "known_dimension", "notes", "confidence", "sha256", "size"}
         if unknown:
             raise ValidationError(f"Unknown input fields: {', '.join(sorted(unknown))}")
         input_id = ensure_id(str(entry.get("id", "")), "input ID")
@@ -321,6 +321,10 @@ def load_task(root: Path, task_id: str) -> TaskDefinition:
         path = resolve_within(inputs_root, raw_path)
         if not path.is_file() or is_link(path):
             raise ValidationError(f"Input {input_id} must be a regular non-linked file")
+        if entry.get("sha256") is not None and entry["sha256"] != sha256_file(path):
+            raise ValidationError("Input checksum does not match owned bytes")
+        if entry.get("size") is not None and entry["size"] != path.stat().st_size:
+            raise ValidationError("Input size does not match owned bytes")
         view = entry.get("view_classification", "unknown")
         if view not in {"orthographic", "perspective", "section", "plan", "unknown"}:
             raise ValidationError(f"Invalid view classification for {input_id}: {view!r}")

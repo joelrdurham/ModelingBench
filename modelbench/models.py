@@ -200,6 +200,26 @@ def begin_invocation(run_dir: Path, role: str, cli_version: str | None = None) -
         return invocation.copy()
 
 
+def heartbeat_invocation(run_dir: Path, role: str, invocation_id: int, *, pid: int, last_output_at: str | None = None) -> dict[str, Any]:
+    """Record that a live child is still supervised without mutating lifecycle state."""
+    selected_role, = _roles(role)
+    with mutation_lock(Path(run_dir)):
+        ledger = _load_ledger(Path(run_dir))
+        if ledger is None:
+            raise StateError("Model settings have not been initialized")
+        invocation = next((item for item in ledger.get("invocations", []) if item.get("id") == invocation_id and item.get("role") == selected_role), None)
+        if invocation is None:
+            raise ValidationError("Unknown invocation for role")
+        if invocation.get("finished_at") is not None:
+            raise StateError("Invocation is already finished")
+        invocation["pid"] = int(pid)
+        invocation["heartbeat_at"] = utc_now()
+        if last_output_at is not None:
+            invocation["last_output_at"] = last_output_at
+        atomic_write_json(_paths(Path(run_dir))[1], ledger)
+        return invocation.copy()
+
+
 def finish_invocation(
     run_dir: Path, role: str, invocation_id: int, runtime_model: str | None = None,
     runtime_effort: str | None = None, usage: dict[str, Any] | None = None, *,

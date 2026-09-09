@@ -106,6 +106,9 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
     artifact = review.integrity(run_dir)
     revision = review.current(run_dir)
     ledger = review.load(run_dir)
+    from .discovery import enabled as discovery_enabled, active_record, active_spec, verification_schema
+    discovered = discovery_enabled(run_dir)
+    discovered_schema = verification_schema() if discovered else None
     directory.mkdir(parents=True, exist_ok=True)
     inputs = directory / 'inputs'
     if not inputs.exists():
@@ -113,10 +116,14 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
         shutil.copy2(artifact, inputs / 'model.blend')
         shutil.copy2(run_dir / 'acceptance.json', inputs / 'acceptance.json')
         shutil.copytree(run_dir / 'snapshot/task', inputs / 'brief')
-        for kind in ('measurements', 'diagnostics', 'final'):
+        for kind in ('measurements', 'diagnostics', 'final', 'reference'):
             source = run_dir / 'revisions' / revision['id'] / kind
             if source.exists():
                 shutil.copytree(source, inputs / kind)
+    if discovered:
+        atomic_write_json(inputs / 'discovered-specification.json', active_spec(run_dir))
+        atomic_write_json(inputs / 'reconstruction-index.json', active_record(run_dir).get('reconstructions', []))
+        shutil.copytree(run_dir / 'evidence', inputs / 'sources', dirs_exist_ok=True)
     intro = (f'You are the independent asset verifier. Inspect {inputs}. Artifact SHA256 {revision["sha256"]}; '
         f'acceptance SHA256 {ledger["acceptance_sha256"]}. Establish your own assessment of the brief, evaluated geometry and images. '
         'Read the full brief and every requirement. Inspect required task views and every declared motion sample with image tools. Do not impose animation requirements on a static task. '
@@ -130,6 +137,13 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
         'or BEST_AVAILABLE only when the exploration hard cap is reached. Keep accuracy, precision, assembly, physical viability, aesthetics/brief fit, and evidence quality separate; '
         'aesthetic strength cannot offset a critical mechanical failure. '
         'Evidence arrays must contain plain file paths, optionally followed by #check-id. Never Markdown links or prose. ')
+    if discovered:
+        intro += ('\nAssess every discovered requirement separately in requirement_results. Cite current independent evidence paths, report numerical deviation only from independent measurements; use zero for purely qualitative assessments. Never convert missing measurement into a passing visual claim. '
+            'Publication requires the exact approved specification. Disclosed identity priors may support hidden geometry but cannot excuse failed visible fit. '
+            'You may return BEST_AVAILABLE only with stopping_reason describing attempted remedies, evidence gaps, and why no further actionable approach remains. '
+            'A single failed edit is not a plateau. NEW_CONCEPT changes construction/interpretation, not target identity. '
+            'Select working seed only from eligible candidate IDs; explain selection. Return empty strings when no seed or stopping reason applies.\n' +
+            json.dumps({'specification': active_spec(run_dir), 'specification_sha256': active_record(run_dir)['specification']['sha256']}))
     # Provide authorized evidence directly as well as on disk. Verification remains usable
     # when the agent's shell is unavailable; no sandbox setting is changed.
     briefing = []
@@ -157,6 +171,15 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
             image_index.append({'image': len(images), 'path': path.relative_to(directory).as_posix(),
                                 'camera': record.get('camera'), 'frame': record.get('frame'), 'sha256': record['sha256'],
                                 'image_quality': {k:record.get(k) for k in ('resolution','decoded','visible_content_coverage','projected_bounds_outside','warnings')}})
+    if discovered:
+        from .evidence import evidence_records
+        for item in evidence_records(run_dir):
+            path = inputs / 'sources' / Path(item['local_path']).relative_to('evidence')
+            if path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.webp'} and path.is_file():
+                if sha256_file(path) != item['sha256']: raise ValidationError('Reference source attachment changed')
+                images.append(path); image_index.append({'image': len(images), 'path': path.relative_to(directory).as_posix(), 'kind': 'owned_reference', 'sha256': item['sha256']})
+        for path in sorted((inputs / 'reference').rglob('*.png')):
+            images.append(path); image_index.append({'image': len(images), 'path': path.relative_to(directory).as_posix(), 'kind': 'reference_fit', 'sha256': sha256_file(path)})
     intro += ('\nThe full brief, independent measurements and required images are supplied directly below and as image attachments. '
               'Use these supplied contents if shell tools are unavailable. Do not mistake shell availability for missing evidence. '
               'Hashes are harness-bound evidence identifiers; distinguish them from hashes you compute yourself. '
@@ -165,7 +188,7 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
     assessment_path = directory / 'assessment.json'
     assessment = read_json(assessment_path)
     if assessment is None:
-        assessment = invoke(root, run_dir, profile, directory / 'assessment', intro + 'Do not read builder claims; resolutions must be empty.', images, budget_deadline=budget_deadline)
+        assessment = invoke(root, run_dir, profile, directory / 'assessment', intro + 'Do not read builder claims; resolutions must be empty.', images, budget_deadline=budget_deadline, **({'output_schema': discovered_schema} if discovered else {}))
         review.integrity(run_dir)
         if sha256_file(inputs / 'model.blend') != revision['sha256']:
             raise ValidationError('Verifier changed the inspection artifact')
@@ -181,7 +204,7 @@ def verify(root, run_dir, profile, directory, *, budget_deadline=None):
             'Preserve initial findings unless independently disproven. Builder acknowledgement is not resolution. '
             'For every resolved task, its own evidence array must cite at least one current-attempt verifier-authored file '
             'or current measurement/final/diagnostic file. Provided, builder_claim and workflow_record paths alone cannot resolve a task. '
-            'For provenance or workflow tasks, write and cite a current independent review of those records.\n' + json.dumps(claims), images, budget_deadline=budget_deadline)
+            'For provenance or workflow tasks, write and cite a current independent review of those records.\n' + json.dumps(claims), images, budget_deadline=budget_deadline, **({'output_schema': discovered_schema} if discovered else {}))
     else:
         result = assessment
     review.integrity(run_dir)
@@ -209,7 +232,7 @@ def normalize_evidence_links(run_dir, directory, result):
     """Own mutable claim references without promoting them to independent evidence."""
     ledger = review.load(run_dir)
     registered = {r['path']: r for rev in ledger['revisions'] for r in rev['evidence']}
-    for item in result.get('findings', []) + result.get('resolutions', []):
+    for item in result.get('findings', []) + result.get('resolutions', []) + result.get('requirement_results', []):
         links = []
         for link in item.get('evidence', []):
             raw, separator, fragment = link.partition('#')

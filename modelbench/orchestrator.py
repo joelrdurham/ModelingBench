@@ -380,10 +380,15 @@ def create_revision(root: Path, identifier: str, execute=True):
         atomic_write_json(run_dir / 'inherited-support.json', supporting)
         destination = run_dir / 'workspace' / 'seed.blend'
         copy_file_owned(source, destination)
-        owned = _owned_submission(run_dir, AgentResult('submitted', str(destination), 'seed', None, False, 'Owned revision seed'))
-        register_revision(run_dir, owned)
+        from .discovery import enabled as discovery_enabled
         from .review import stage
-        stage(run_dir, 'measurements')
+        if discovery_enabled(run_dir):
+            # A new run audits its evidence anew; the owned seed is available to its builder afterward.
+            stage(run_dir, 'discovery')
+        else:
+            owned = _owned_submission(run_dir, AgentResult('submitted', str(destination), 'seed', None, False, 'Owned revision seed'))
+            register_revision(run_dir, owned)
+            stage(run_dir, 'measurements')
         atomic_write_json(run_dir / 'parent.json', {'run': identifier, 'artifact_sha256': source_artifact['sha256']})
         if execute:
             return run_loop(root, generated, run_dir)

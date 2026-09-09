@@ -93,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     response.add_argument('--message', required=True)
     check = sub.add_parser('self-check', help='Run the independent geometry evaluator on a workspace artifact')
     check.add_argument('--source', required=True)
+    for name in ('validate-spec', 'propose-spec'):
+        spec = sub.add_parser(name, help='Validate or propose an independently audited specification amendment')
+        spec.add_argument('--file', required=True)
+        if name == 'propose-spec': spec.add_argument('--reason', required=True)
     return parser
 
 
@@ -100,7 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         root, run_dir, workspace = _context()
-        if args.command == 'respond':
+        if args.command in {'validate-spec', 'propose-spec'}:
+            from .discovery import validate_spec, propose_amendment, evidence_inventory
+            spec = _json_file_in_workspace(workspace, args.file, 'Specification')
+            result = propose_amendment(run_dir, spec, args.reason) if args.command == 'propose-spec' else {'valid': bool(validate_spec(spec, {e['id'] for e in evidence_inventory(run_dir)}))}
+        elif args.command == 'respond':
             from .review import respond
             result = respond(run_dir, args.task, args.message)
         elif args.command == 'self-check':

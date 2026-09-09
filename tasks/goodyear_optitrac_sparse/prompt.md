@@ -1,0 +1,1 @@
+Create a static, unladen, tire-only model of the Goodyear Optitrac LSW 1400/30R46 agricultural tire. Research the exact variant and its appearance. No wheel, rim, tractor, or support geometry is requested.

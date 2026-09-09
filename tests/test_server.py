@@ -161,4 +161,37 @@ class ServerTests(unittest.TestCase):
             self.assertTrue((self.server.generated / "system-feedback" / "events.jsonl").is_file())
             browser.close()
 
+    def test_browser_renders_discovery_ledger_and_budget_control(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.skipTest("Install the test extra for browser checks")
+        edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
+        if not edge.exists():
+            self.skipTest("Microsoft Edge is unavailable")
+        run = self.server.generated / "sample" / "runs" / "run_000001"
+        (run / "snapshot").mkdir(parents=True)
+        (run / "discovery" / "versions" / "spec_000001").mkdir(parents=True)
+        spec = {"target":{"identity":"Field lantern","scope":"full asset","status":"established"},
+                "entities":[{"id":"body","name":"Lamp body"}],
+                "claims":[{"id":"c1","kind":"prior","statement":"Hidden rear panel is inferred"}],
+                "requirements":[{"id":"r1","critical":True,"criterion":"Body silhouette matches"}],
+                "references":[{"id":"ref1","applicability":"Front reference"}]}
+        atomic_write_json(run / "snapshot" / "task.json", {"specification_mode":"discovered"})
+        atomic_write_json(run / "discovery" / "versions" / "spec_000001" / "specification.json", spec)
+        atomic_write_json(run / "discovery" / "ledger.json", {"version":1, "active":"spec_000001", "stage":"modeling", "working_seed":"candidate_2",
+            "candidates":[{"id":"candidate_2","selected":True}], "versions":[{"id":"spec_000001","specification":{"path":"discovery/versions/spec_000001/specification.json"}}],
+            "last_audit":{"decision":"APPROVE","assessment":"Coverage complete"}})
+        atomic_write_json(run / "state.json", {"task_id":"sample","run_id":"run_000001","state":"modeling"})
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=str(edge), headless=True)
+            page = browser.new_page(); page.goto(f"{self.server.origin}/?action={self.server.action_token}")
+            page.get_by_text("Field lantern").wait_for()
+            self.assertTrue(page.get_by_text("Field lantern").is_visible())
+            self.assertTrue(page.get_by_text("[prior] Hidden rear panel is inferred").is_visible())
+            self.assertTrue(page.get_by_text("working seed: candidate_2").is_visible())
+            page.get_by_role("button", name="New run").click()
+            self.assertTrue(page.get_by_text("Budget seconds").is_visible())
+            browser.close()
+
 if __name__ == '__main__': unittest.main()

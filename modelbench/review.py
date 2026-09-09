@@ -30,15 +30,16 @@ def event(value, kind, **data):
 def initialize(run_dir):
     task = read_json(run_dir / 'snapshot/task.json')
     from .design import ExplorationState, parse_design_manifest
-    manifest = parse_design_manifest(task)
+    discovered = task.get('specification_mode') == 'discovered'
+    manifest = None if discovered else parse_design_manifest(task)
     exploration_config = task.get('design_exploration', {}) if isinstance(task, dict) else {}
-    enabled = isinstance(exploration_config, dict) and exploration_config.get('enabled') is True
+    enabled = not discovered and isinstance(exploration_config, dict) and exploration_config.get('enabled') is True
     exploration = ExplorationState(enabled=enabled,
         concept_limit=int(exploration_config.get('concepts', 3)) if enabled else 3,
         refinement_limit=int(exploration_config.get('refinement_rounds', 4)) if enabled else 4,
         cycle_limit=int(exploration_config.get('cycles', 2)) if enabled else 2)
     checklist = {'version': 1, 'brief': file_inventory(run_dir / 'snapshot/task'),
-                 'task': task, 'design_manifest': manifest.record(),
+                 'task': task, 'design_manifest': manifest.record() if manifest else None,
                  'policy': 'All snapshotted brief requirements remain binding. Unspecified measurements are unassessed. No tolerance relaxation.'}
     with lock(run_dir):
         if (run_dir / 'review.json').exists():
@@ -74,6 +75,9 @@ def register_revision(run_dir, artifact, builder_invocation=None):
                     'design_iteration': ({'concept_id': exploration.get('current_concept_id'), 'cycle': exploration.get('cycles'),
                         'phase': exploration.get('phase'), 'refinement_round': exploration.get('refinements')} if exploration.get('enabled') else None),
                     'builder_provenance': ({**builder_invocation, 'artifact_sha256': sha256_file(artifact)} if isinstance(builder_invocation, dict) else None)}
+        from .discovery import enabled as discovery_enabled, active_record
+        if discovery_enabled(run_dir):
+            revision['specification_sha256'] = active_record(run_dir)['specification']['sha256']
         directory = run_dir / 'revisions' / revision['id']
         if directory.exists():
             receipt = read_json(directory / 'revision.json')
@@ -233,6 +237,8 @@ def record_verification(run_dir, result):
             raise ValidationError('Verifier findings and resolutions must be arrays')
         if result['verdict'] == 'pass' and result['findings']:
             raise ValidationError('A pass cannot contain actionable findings')
+        from .discovery import verify_requirements, retain_candidates
+        verify_requirements(run_dir, revision, result)
         decisions = []
         for decision in result['resolutions']:
             task = next((t for t in value['tasks'] if t['id'] == decision.get('task_id')), None)
@@ -314,6 +320,7 @@ def record_verification(run_dir, result):
             value['exploration'] = {**record, 'audits': audits}
             revision['design_audit'] = audit_record
             event(value, 'design_decision', **audit_record)
+        retain_candidates(run_dir, value)
         event(value, 'verified', revision=revision['id'], verdict=result['verdict'], decision=decision)
         save(run_dir, value)
 
@@ -333,6 +340,8 @@ def assert_publishable(run_dir, artifact_sha256):
     if control.get('cancel_requested') or control.get('pause_requested'):
         raise StateError('Publication paused or cancelled')
     evaluation, verification = revision.get('evaluation') or {}, revision.get('verification') or {}
+    from .discovery import verify_requirements
+    verify_requirements(run_dir, revision, verification, publication=True)
     if revision['sha256'] != artifact_sha256 or evaluation.get('source_sha256') != artifact_sha256 or evaluation.get('passed') is not True:
         raise StateError('Deterministic measurements did not pass for this artifact')
     if not evaluation.get('checks') or any(c.get('status') == 'fail' for c in evaluation['checks']):
@@ -366,7 +375,7 @@ def package(run_dir, destination):
         source = run_dir / name
         if source.is_file():
             shutil.copy2(source, destination / name)
-    for name in ('revisions', 'artifacts', 'snapshot', 'feedback', 'evidence', 'checkpoints', 'logs'):
+    for name in ('revisions', 'artifacts', 'snapshot', 'feedback', 'evidence', 'checkpoints', 'logs', 'discovery'):
         source = run_dir / name
         if source.is_dir():
             shutil.copytree(source, destination / name, dirs_exist_ok=True)

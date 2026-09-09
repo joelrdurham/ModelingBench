@@ -130,10 +130,15 @@ def _geometry_inventory(collection, task: dict) -> tuple[dict, list[float], list
     if evaluated_objects == 0 or polygons == 0 or not _finite(lower + upper):
         raise RuntimeError("MODEL has no non-empty evaluated polygonal geometry")
     frame = task["frame"]
+    if frame.get('auto_frame'):
+        span = max(max(upper[i] - lower[i] for i in range(3)), 1e-6)
+        frame['bounds_min'] = [x - span * .05 for x in lower]
+        frame['bounds_max'] = [x + span * .05 for x in upper]
+        frame['evaluation_center'] = [(a + b) / 2 for a, b in zip(lower, upper)]
     allowed_min = [float(value) for value in frame["bounds_min"]]
     allowed_max = [float(value) for value in frame["bounds_max"]]
     epsilon = 1e-6
-    if any(lower[i] < allowed_min[i] - epsilon or upper[i] > allowed_max[i] + epsilon for i in range(3)):
+    if not frame.get("framing_only") and any(lower[i] < allowed_min[i] - epsilon or upper[i] > allowed_max[i] + epsilon for i in range(3)):
         raise RuntimeError(f"Evaluated bounds {lower}..{upper} exceed task bounds {allowed_min}..{allowed_max}")
     anchors = []
     by_name = {obj.name: obj for obj in objects}

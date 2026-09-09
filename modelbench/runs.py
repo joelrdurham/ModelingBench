@@ -125,6 +125,22 @@ def create_run(
         shutil.copy2(measurement_driver, run_dir / 'snapshot' / 'measure_driver.py')
         metadata['measurement_driver'] = {'sha256': sha256_file(measurement_driver)}
         atomic_write_json(run_dir / 'run.json', metadata)
+    helper = root / 'modelbench/geometry_checks.py'
+    if helper.is_file():
+        shutil.copy2(helper, run_dir / 'snapshot/geometry_checks.py')
+        metadata['geometry_checks'] = {'sha256': sha256_file(helper)}
+    reference_driver = root / 'modelbench/reference_driver.py'
+    if reference_driver.is_file():
+        shutil.copy2(reference_driver, run_dir / 'snapshot/reference_driver.py')
+        metadata['reference_driver'] = {'sha256': sha256_file(reference_driver)}
+    if task.config.get('specification_mode') == 'discovered':
+        metadata['workflow_version'] = 2
+        from .reconstruction.core import _implementation_hash
+        metadata['reconstruction_implementation_sha256'] = _implementation_hash()
+        metadata['reference_evaluator_sha256'] = sha256_file(Path(__file__).with_name('reference.py'))
+        metadata['runtime'] = {'python': __import__('sys').version, 'platform': __import__('platform').platform(),
+            'context_policy': 'Owned brief, registered sources, explicit profile tools; no implicit asset context'}
+    atomic_write_json(run_dir / 'run.json', metadata)
     return run_dir
 
 
@@ -163,6 +179,10 @@ def verify_run_snapshot(run_dir: Path) -> None:
     }
     if metadata.get('measurement_driver'):
         checks['measurement evaluator'] = (snapshot / 'measure_driver.py', metadata['measurement_driver']['sha256'])
+    if metadata.get('geometry_checks'):
+        checks['geometry checks'] = (snapshot / 'geometry_checks.py', metadata['geometry_checks']['sha256'])
+    if metadata.get('reference_driver'):
+        checks['reference driver'] = (snapshot / 'reference_driver.py', metadata['reference_driver']['sha256'])
     for label, (path, expected) in checks.items():
         if not path.is_file() or is_link(path) or not isinstance(expected, str) or sha256_file(path) != expected:
             raise StateError(f"{label.capitalize()} snapshot integrity check failed")
@@ -300,15 +320,23 @@ def status_records(generated: Path, identifier: str | None = None) -> list[dict[
     records = []
     for path in paths:
         state = load_state(path)
+        model_settings = __import__('modelbench.models', fromlist=['settings']).settings(path)
+        invocation_activity = [
+            item.get("heartbeat_at") or item.get("finished_at") or item.get("requested_at")
+            for item in model_settings.get("invocations", [])
+            if isinstance(item, dict)
+        ]
+        activity_at = max([value for value in [state.get("updated_at"), *invocation_activity] if isinstance(value, str)], default=None)
         records.append({
             "run": f"{state['task_id']}/{state['run_id']}",
             "state": state["state"],
             "turns": state.get("observed_turns", 0),
             "checkpoints": state.get("observed_checkpoints", 0),
             "updated_at": state.get("updated_at"),
+            "activity_at": activity_at,
             "artifact": state.get("artifact"),
             "failure": state.get("failure"),
-            "models": __import__('modelbench.models', fromlist=['settings']).settings(path),
+            "models": model_settings,
             "review": read_json(path / 'review.json', {'provenance': 'Not recorded'}),
         })
     return records

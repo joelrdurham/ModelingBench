@@ -1,0 +1,8 @@
+version = 2
+id = "goodyear_optitrac_sparse"
+title = "Goodyear Optitrac sparse reconstruction"
+specification_mode = "discovered"
+
+[research]
+enabled = true
+mode = "live"

@@ -27,7 +27,9 @@ def _valid_cache(value: Any, source: str, evaluator: str) -> bool:
 def evaluate(root: Path, run_dir: Path, artifact: Path, output_dir: Path, *, owned: bool=True, budget_deadline: float | None=None) -> dict[str, Any]:
     """Measure an artifact, binding cache, input bytes, task and snapshot evaluator exactly."""
     if owned: verify_run_snapshot(run_dir)
-    source=_source_hash(run_dir,artifact,owned); task=read_json(run_dir/'snapshot'/'task.json')
+    source=_source_hash(run_dir,artifact,owned)
+    from .discovery import effective_task
+    task=effective_task(run_dir)
     if not isinstance(task,dict): raise StateError('Measurement task snapshot is invalid')
     driver=_driver(run_dir); evaluator=sha256_file(driver); key=canonical_hash({'artifact':source,'task':task,'evaluator':evaluator}); output_dir.mkdir(parents=True,exist_ok=True); file_key=key[:16]; cache=output_dir/f'measurement_{file_key}.json'
     cached=read_json(cache)

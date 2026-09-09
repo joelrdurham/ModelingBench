@@ -8,6 +8,7 @@ child processes so a browser request never executes a shell command.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import mimetypes
 import secrets
@@ -23,6 +24,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .blender import find_blender
+from .briefs import MEDIA_TYPES, MAX_REFERENCE_BYTES, create_brief_task
+from .errors import ValidationError
 from .project import ensure_generated_root, find_project_root
 from .runs import resolve_run, status_records
 from .system_feedback import add_system_feedback
@@ -31,6 +34,7 @@ from .util import is_link, read_json, sha256_file
 UI_ROOT = Path(__file__).with_name("ui")
 STATIC_FILES = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
 MAX_BODY = 16_384
+MAX_UPLOAD_BODY = 24 * 1024 * 1024
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -52,6 +56,7 @@ class ReviewServer(ThreadingHTTPServer):
         self.assets: dict[str, tuple[Path, str]] = {}
         self.asset_keys: dict[tuple[Any, ...], str] = {}
         self.workers: list[Worker] = []
+        self.uploads: dict[str, tuple[Path, str, str]] = {}
         self._worker_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), ReviewHandler)
 
@@ -135,7 +140,38 @@ class ReviewServer(ThreadingHTTPServer):
                            "title": entry.get("title") if isinstance(entry.get("title"), str) else input_id,
                            "category": "reference", "notes": entry.get("notes") if isinstance(entry.get("notes"), str) else None,
                            "alias": Path(relative).as_posix()})
+        from .evidence import evidence_records
+        for entry in evidence_records(run_dir):
+            if not isinstance(entry, dict) or entry.get("origin") != "agent_researched" or not str(entry.get("media_type", "")).startswith("image/"):
+                continue
+            relative, expected = entry.get("local_path"), entry.get("sha256")
+            if not isinstance(relative, str) or not isinstance(expected, str):
+                continue
+            path = (run_dir / relative).resolve()
+            try: path.relative_to((run_dir / "evidence" / "files").resolve())
+            except ValueError: continue
+            if not path.is_file() or is_link(path) or path.suffix.lower() not in IMAGE_SUFFIXES or sha256_file(path) != expected:
+                continue
+            asset_id = self._register_asset((run_name, "research", entry.get("id"), expected), path, expected)
+            result.append({"id": asset_id, "url": f"/api/assets/{asset_id}", "name": path.name,
+                           "title": entry.get("title") if isinstance(entry.get("title"), str) else "Research reference",
+                           "category": "research", "notes": entry.get("notes") if isinstance(entry.get("notes"), str) else None,
+                           "alias": relative})
         return result
+
+    def store_upload(self, *, data: bytes, media_type: str) -> str:
+        if media_type not in MEDIA_TYPES.values() or not data or len(data) > MAX_REFERENCE_BYTES: raise ValidationError("unsupported or oversized upload")
+        suffix = next(ext for ext, mime in MEDIA_TYPES.items() if mime == media_type); upload_id = "up_" + secrets.token_hex(16)
+        directory = self.generated / "uploads" / upload_id; directory.mkdir(parents=True, exist_ok=False); path = directory / ("source" + suffix); path.write_bytes(data)
+        if is_link(path) or not path.is_file(): raise ValidationError("could not safely store upload")
+        self.uploads[upload_id] = (path, sha256_file(path), media_type); return upload_id
+
+    def upload_path(self, upload_id: str) -> Path:
+        record = self.uploads.get(upload_id)
+        if record is None: raise ValidationError("unknown upload")
+        path, expected, _ = record
+        if not path.is_file() or is_link(path) or sha256_file(path) != expected: raise ValidationError("upload is unavailable")
+        return path
 
     def revision_provenance(self, run_name: str) -> dict[str, dict[str, Any]]:
         """Builder logs are not revision-bound; verifier receipts are when registered and intact."""
@@ -235,6 +271,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     record["assets"] = self.server.asset_index(record["run"])
                     record["references"] = self.server.reference_index(record["run"])
                     record["provenance"] = self.server.revision_provenance(record["run"])
+                    try:
+                        from .discovery import summary
+                        record["discovery"] = summary(resolve_run(self.server.generated, record["run"]))
+                    except (ImportError, AttributeError, ValidationError):
+                        record["discovery"] = {}
                 self._json({"tasks": sorted(path.name for path in (self.server.root / "tasks").iterdir() if path.is_dir()), "runs": records, "workers": self.server.worker_records()})
             except Exception as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -268,7 +309,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/action":
+        path = urlparse(self.path).path
+        if path not in {"/api/action", "/api/upload"}:
             self._deny(HTTPStatus.NOT_FOUND, "not found")
             return
         if not self._host_ok() or self.headers.get("Origin") != self.server.origin or self.headers.get("X-ModelBench-Action") != self.server.action_token:
@@ -282,14 +324,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
         except ValueError:
             self._deny(HTTPStatus.BAD_REQUEST, "invalid request size")
             return
-        if size <= 0 or size > MAX_BODY:
+        if size <= 0 or size > (MAX_UPLOAD_BODY if path == "/api/upload" else MAX_BODY):
             self._deny(HTTPStatus.BAD_REQUEST, "invalid request size")
             return
         try:
             body = json.loads(self.rfile.read(size))
             if not isinstance(body, dict):
                 raise ValueError("object required")
-            response = self._action(body)
+            response = self._upload(body) if path == "/api/upload" else self._action(body)
             self._json(response, HTTPStatus.ACCEPTED)
         except (ValueError, KeyError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -307,7 +349,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     if effort not in {"low", "medium", "high", "xhigh", "max", "ultra"}:
                         raise ValueError(f"Unsupported {role} effort")
                     command += [f"--{role}-effort", effort]
+            command += _budget_args(body)
             return self.server.start_worker(command)
+        if action == "brief-run":
+            references = body.get("references", [])
+            if not isinstance(references, list) or len(references) > 16 or not all(isinstance(item, str) for item in references): raise ValueError("references must be a list of upload IDs")
+            task_id = create_brief_task(self.server.root, _text(body, "brief"), _optional_text(body, "notes", 16000), [self.server.upload_path(item) for item in references], _research_mode(body))
+            command = ["run", task_id, "--agent", _text(body, "agent"), "--verifier", _text(body, "verifier")]
+            for role in ("builder", "verifier"):
+                key = f"{role}_effort"
+                if key in body:
+                    effort = _text(body, key)
+                    if effort not in {"low", "medium", "high", "xhigh", "max", "ultra"}: raise ValueError(f"Unsupported {role} effort")
+                    command += [f"--{role}-effort", effort]
+            command += _budget_args(body)
+            return {**self.server.start_worker(command), "task": task_id}
         run = _text(body, "run")
         if action == "system-feedback":
             run_dir = resolve_run(self.server.generated, run)
@@ -336,11 +392,36 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return self.server.start_worker(["set-model", run, "--role", _text(body, "role"), "--model", _text(body, "model"), "--effort", _text(body, "effort")])
         raise ValueError("unsupported action")
 
+    def _upload(self, body: dict[str, Any]) -> dict[str, Any]:
+        media_type, encoded = body.get("media_type"), body.get("data")
+        if not isinstance(media_type, str) or media_type not in MEDIA_TYPES.values() or not isinstance(encoded, str): raise ValueError("supported media_type and base64 data are required")
+        if len(encoded) > (MAX_REFERENCE_BYTES * 4 // 3) + 8: raise ValueError("upload exceeds size limit")
+        try: data = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc: raise ValueError("invalid base64 upload") from exc
+        return {"id": self.server.store_upload(data=data, media_type=media_type)}
+
 def _text(body: dict[str, Any], name: str) -> str:
     value = body.get(name)
     if not isinstance(value, str) or not value.strip() or len(value) > 4096:
         raise ValueError(f"{name} is required")
     return value.strip()
+
+def _optional_text(body: dict[str, Any], name: str, limit: int) -> str:
+    value = body.get(name, "")
+    if not isinstance(value, str) or len(value) > limit: raise ValueError(f"{name} must be text up to {limit} characters")
+    return value.strip()
+
+def _budget_args(body: dict[str, Any]) -> list[str]:
+    value = body.get("budget_seconds")
+    if value is None: return []
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value > 86_400:
+        raise ValueError("budget_seconds must be a positive integer up to 86400")
+    return ["--budget-seconds", str(value)]
+
+def _research_mode(body: dict[str, Any]) -> str:
+    value = body.get("research_mode", "live")
+    if value not in {"live", "offline"}: raise ValueError("research_mode must be live or offline")
+    return value
 
 def _frame_number(path: Path) -> int | None:
     match = re.search(r"(?:frame|f)[_-]?(\d{1,6})(?:\D|$)", path.stem, re.IGNORECASE) or re.match(r"^.*_(\d{4,6})$", path.stem)

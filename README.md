@@ -122,3 +122,9 @@ existing run profiles remain unchanged. The Python harness does not itself creat
 container around arbitrary agent profiles or Blender. Deployments that process
 untrusted agents or `.blend` files must provide an external filesystem and
 network sandbox for those processes.
+
+## Sparse briefs and modular reference reconstruction
+
+Named-model briefs can now discover and independently audit their own dimensions, parts, identity priors, and acceptance requirements. Start from the reviewer Brief tab or `modelbench run --brief "Named model and variant" --agent codex --verifier codex`. Optional `--reference` files and `--notes-file` supply user evidence.
+
+The perspective reconstruction engine is a separate package with solve, replay, and comparison commands. Install the reference extra with `python -m pip install -e ".[reference]"`. See [discovered-specification workflow](docs/discovered-specifications.md) and [reconstruction engine](docs/reconstruction.md) for contracts, capabilities, and validation. Existing v1 tasks remain compatible; `goodyear_optitrac_sparse` exercises the new discovery workflow without supplying catalog answers.

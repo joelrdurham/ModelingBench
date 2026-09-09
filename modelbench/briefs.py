@@ -35,6 +35,8 @@ def create_brief_task(
     if research_mode not in {"live", "offline"}:
         raise ValidationError("research_mode must be live or offline")
     generated = ensure_generated_root(Path(root).resolve())
+    for parent in (generated / "briefs", generated / "briefs" / "tasks"):
+        if is_link(parent): raise ValidationError("brief task parents may not be links or junctions")
     task_id = "brief_" + secrets.token_hex(12)
     directory = generated / "briefs" / "tasks" / task_id
     inputs = directory / "inputs"

@@ -100,6 +100,11 @@ def build_agent_prompt(run_dir: Path) -> str:
         for path in sorted(instructions_dir.rglob("*")):
             if path.is_file():
                 instructions.append(f"\n## Instruction: {path.relative_to(instructions_dir).as_posix()}\n{path.read_text(encoding='utf-8')}")
+    from .discovery import enabled as discovery_enabled, active_spec, active_record, PROMPT
+    discovered = discovery_enabled(run_dir)
+    if discovered:
+        prompt += '\n# Audited discovered specification\n' + json.dumps(active_spec(run_dir), indent=2)
+        prompt += '\n' + PROMPT + '\nThe discovery stage is complete. Model against this approved specification. Request an amendment with modelbench-agent propose-spec --file <spec.json> --reason <reason>; only an independent audit can approve changes. Do not wait for audit before returning a checkpoint/submission.\n'
     latest = state.get("latest_checkpoint")
     pending = pending_feedback(run_dir)
     metadata = read_json(run_dir / "run.json", {})
@@ -145,6 +150,7 @@ def build_agent_prompt(run_dir: Path) -> str:
         "checkpoint_command": f'"{os.sys.executable}" -m modelbench.agent_cli checkpoint --source <workspace .blend> --phase <label>',
         "evidence_command": f'"{os.sys.executable}" -m modelbench.agent_cli evidence --file <workspace file> [metadata]',
         "design_manifest": acceptance.get('design_manifest'),
+        "specification_sha256": active_record(run_dir)["specification"]["sha256"] if discovered else None,
         "design_exploration": review_state.get('exploration'),
     }
     return (
@@ -241,7 +247,7 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile, *, budget_dead
     turn = int(state.get("observed_turns", 0)) + 1
     if "max_turns" in profile.data.get("limits", {}) and turn > profile.limit("max_turns", 8):
         raise ValidationError(f"Agent turn limit exceeded ({profile.limit('max_turns', 8)})")
-    from .models import begin_invocation, finish_invocation
+    from .models import begin_invocation, finish_invocation, heartbeat_invocation
     frozen = begin_invocation(run_dir, 'builder', cli_version=cli_version(profile)) if (run_dir / 'model-settings.json').exists() else None
     state['observed_turns'] = turn
     save_state(run_dir, state)
@@ -319,6 +325,10 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile, *, budget_dead
     err_thread = threading.Thread(target=_capture, args=(process.stderr, run_dir / "logs" / f"agent_turn_{turn:04d}.stderr.log", events, "stderr", event_lock))
     out_thread.start()
     err_thread.start()
+    last_event_size = events.stat().st_size if events.exists() else 0
+    last_output_at = invocation["started_at"]
+    if frozen:
+        heartbeat_invocation(run_dir, 'builder', frozen['id'], pid=process.pid, last_output_at=last_output_at)
 
     def feed_prompt() -> None:
         try:
@@ -326,7 +336,8 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile, *, budget_dead
         except (BrokenPipeError, OSError, ValueError):
             pass
         finally:
-            process.stdin.close()
+            try: process.stdin.close()
+            except OSError: pass
 
     input_thread = threading.Thread(target=feed_prompt)
     input_thread.start()
@@ -347,7 +358,12 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile, *, budget_dead
                 code = process.wait(timeout=min(1.0, remaining))
                 break
             except subprocess.TimeoutExpired:
-                pass
+                if frozen:
+                    event_size = events.stat().st_size if events.exists() else 0
+                    if event_size != last_event_size:
+                        last_event_size = event_size
+                        last_output_at = utc_now()
+                    heartbeat_invocation(run_dir, 'builder', frozen['id'], pid=process.pid, last_output_at=last_output_at)
     except (subprocess.TimeoutExpired, KeyboardInterrupt, BudgetExhausted) as exc:
         terminate_process_tree(process)
         raise

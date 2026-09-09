@@ -57,6 +57,22 @@ class BlenderRegressionTests(unittest.TestCase):
             create = "import bpy; bpy.ops.wm.read_factory_settings(use_empty=True); c=bpy.data.collections.new('MODEL'); bpy.context.scene.collection.children.link(c); bpy.ops.mesh.primitive_cube_add(); o=bpy.context.object; o.name='PANEL'; o['claimed_width']=1.0; c.objects.link(o); o.scale=(0.5,0.25,0.01); o.keyframe_insert(data_path='scale',frame=1); o.scale=(1.0,0.25,0.01); o.keyframe_insert(data_path='scale',frame=40); bpy.ops.mesh.primitive_cube_add(location=(0,0,0)); a=bpy.context.object; a.name='PIVOT_A'; c.objects.link(a); bpy.ops.mesh.primitive_cube_add(location=(1,0,0)); b=bpy.context.object; b.name='PIVOT_B'; c.objects.link(b); b.keyframe_insert(data_path='location',frame=1); b.location.x=2; b.keyframe_insert(data_path='location',frame=40); bpy.ops.wm.save_as_mainfile(filepath=%r)" % str(blend)
             subprocess.run([blender, "--background", "--factory-startup", "--disable-autoexec", "--python-expr", create], check=True, capture_output=True, text=True)
             invoke.write_text(json.dumps({"source_blend": str(blend), "result_path": str(result), "task": {"verification": {"frames": [1, 40], "roles": {"lid_panel": "PANEL", "a": "PIVOT_A", "b": "PIVOT_B"}, "dimensions": [{"id": "panel_extent", "kind": "extent", "role": "lid_panel", "axis": 0, "expected": 1.0, "tolerance": 0.02}, {"id": "panel", "kind": "panel_size", "role": "lid_panel", "expected": [1.0, 0.5], "tolerance": 0.02}, {"id": "pivot_distance", "kind": "distance", "from_role": "a", "to_role": "b", "expected": 1.0, "tolerance": 0.01}]}}}), encoding="utf-8")
+            payload = json.loads(invoke.read_text(encoding="utf-8"))
+            payload["task"]["assembly"] = {
+                "components": [{"id": "chassis", "roles": ["a"]}],
+                "interfaces": [
+                    {"id": "pivot_a_i", "role": "a"},
+                    {"id": "pivot_b_i", "role": "b"},
+                ],
+                "ground_resolution": {
+                    "environment_component": "chassis",
+                    "interfaces": ["pivot_a_i", "pivot_b_i"],
+                    "interface_tolerance": 2.0,
+                    "redundant_link_tolerance": 0.01,
+                    "prohibited_geometry_patterns": [],
+                },
+            }
+            invoke.write_text(json.dumps(payload), encoding="utf-8")
             driver = Path(__file__).resolve().parents[1] / "modelbench" / "measure_driver.py"
             subprocess.run([blender, "--background", "--factory-startup", "--disable-autoexec", "--python", str(driver), "--", str(invoke)], check=True, capture_output=True, text=True)
             findings = json.loads(result.read_text(encoding="utf-8"))

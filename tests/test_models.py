@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from modelbench.errors import StateError, ValidationError
-from modelbench.models import begin_invocation, change, confirm_invocation, finish_invocation, initialize, mutation_lock, settings
+from modelbench.models import begin_invocation, change, confirm_invocation, finish_invocation, heartbeat_invocation, initialize, mutation_lock, settings
 from modelbench.util import atomic_write_json, read_json
 
 
@@ -59,6 +59,18 @@ class ModelSettingsTests(unittest.TestCase):
         original = read_json(self.run / "model-settings.initial.json")
         change(self.run, "verifier", "gpt-6-astra", "high")
         self.assertEqual(read_json(self.run / "model-settings.initial.json"), original)
+
+    def test_heartbeat_records_live_pid_and_output_activity(self):
+        initialize(self.run, profile(), profile(), {})
+        invocation = begin_invocation(self.run, "builder")
+        first = heartbeat_invocation(self.run, "builder", invocation["id"], pid=1234, last_output_at="2026-09-09T22:00:00Z")
+        second = heartbeat_invocation(self.run, "builder", invocation["id"], pid=1234)
+        self.assertEqual(second["pid"], 1234)
+        self.assertEqual(second["last_output_at"], first["last_output_at"])
+        self.assertGreaterEqual(second["heartbeat_at"], first["heartbeat_at"])
+        finish_invocation(self.run, "builder", invocation["id"])
+        with self.assertRaises(StateError):
+            heartbeat_invocation(self.run, "builder", invocation["id"], pid=1234)
 
     def test_reentrant_mutation_lock(self):
         with mutation_lock(self.run):

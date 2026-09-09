@@ -5,6 +5,10 @@ from pathlib import Path
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+# The evaluator is snapshotted alongside this driver. Prefer that exact copy.
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from geometry_checks import evaluate_mesh
+
 
 def _args(): return json.loads(Path(sys.argv[sys.argv.index('--')+1]).read_text(encoding='utf-8-sig'))
 def _hash(path):
@@ -21,6 +25,14 @@ def _mesh(obj,dg):
  ev=obj.evaluated_get(dg); me=ev.to_mesh(); verts=[ev.matrix_world@v.co for v in me.vertices]; faces=[p.vertices[:] for p in me.polygons]; ev.to_mesh_clear()
  if not verts: raise RuntimeError('No evaluated mesh vertices: '+obj.name)
  return verts,faces
+def _plain_mesh(obj,dg):
+ verts,faces=_mesh(obj,dg); return [tuple(float(v[i]) for i in range(3)) for v in verts],[tuple(int(i) for i in f) for f in faces]
+def _geometry_selection(spec,model):
+ """Object-name selectors only; roles and custom properties cannot prove geometry."""
+ entity=spec.get('entity_id'); patterns=spec.get('patterns') or []; candidates=[o for o in model.all_objects if o.type=='MESH' and not o.hide_render]
+ if entity: candidates=[o for o in candidates if o.name==entity]
+ if patterns: candidates=[o for o in candidates if any(fnmatch.fnmatchcase(o.name.casefold(),str(p).casefold()) for p in patterns)]
+ return candidates
 def _center(obj,dg):
  verts,_=_mesh(obj,dg); return sum(verts,Vector())/len(verts)
 def _bvh(obj,dg):
@@ -102,7 +114,9 @@ def _circle_upper(b,c,rbd,rcd):
 def _main(inv):
  source=Path(inv['source_blend']); bpy.ops.wm.open_mainfile(filepath=str(source),load_ui=False); model=bpy.data.collections.get('MODEL')
  if model is None: raise RuntimeError('MODEL collection missing')
- task=inv['task']; cfg=task.get('verification',{}); by={o.name:o for o in model.all_objects}; roles={k:by.get(v) for k,v in cfg.get('roles',{}).items()}; frames=cfg.get('frames',list(range(int(bpy.context.scene.frame_start),int(bpy.context.scene.frame_end)+1))); checks=[]; baseline={}
+ task=inv['task']; cfg=task.get('verification',{}); by={o.name:o for o in model.all_objects}; roles={k:by.get(v) for k,v in cfg.get('roles',{}).items()}; frames=cfg.get('frames',list(range(int(bpy.context.scene.frame_start),int(bpy.context.scene.frame_end)+1))); checks=[]; baseline={}; geometry_requirements=task.get('geometry_requirements'); geometry_coverage={} if isinstance(geometry_requirements,list) else None
+ # Assembly checks below inspect evaluated meshes before the per-frame loop.
+ bpy.context.scene.frame_set(int(frames[0])); dg=bpy.context.evaluated_depsgraph_get()
  for name,obj in roles.items():
   if obj is None: checks.append(_check('missing_role_'+name,'Declared role '+name,'unknown','existing geometry',None,0,[],None,'Declared geometry role is missing; dependent measurements are unavailable'))
  actual_range=[int(bpy.context.scene.frame_start),int(bpy.context.scene.frame_end)]; expected_range=[min(frames),max(frames)]; checks.append(_check('scene_frame_range','Scene frame range covers required verification frames','pass' if actual_range[0]<=expected_range[0] and actual_range[1]>=expected_range[1] else 'fail',expected_range,actual_range,0,[],None,'Measured source scene frame_start/frame_end'))
@@ -150,6 +164,20 @@ def _main(inv):
  for frame in frames:
   bpy.context.scene.frame_set(int(frame)); dg=bpy.context.evaluated_depsgraph_get(); centers={k:(_center(o,dg) if o and o.type=='MESH' else None) for k,o in roles.items()}
   if material_policy_active: checks.extend(_material_checks(material_policy,model,dg,frame))
+  if isinstance(geometry_requirements,list):
+   visible={obj.name for obj in model.all_objects if obj.type=='MESH' and not obj.hide_render}
+   assigned=set()
+   for spec in geometry_requirements:
+    if not isinstance(spec,dict): continue
+    ident=str(spec.get('id','geometry_requirement')); selected=_geometry_selection(spec,model); assigned.update(obj.name for obj in selected)
+    actual=[dict({'object':obj.name},**evaluate_mesh(*_plain_mesh(obj,dg),representation=spec.get('representation','solid'),tolerance=float(spec.get('tolerance',1e-6)))) for obj in selected]
+    statuses=[entry['status'] for entry in actual]
+    status='unknown' if not statuses else ('fail' if 'fail' in statuses else ('unknown' if 'unknown' in statuses else 'pass'))
+    check=_check(ident,'Evaluated geometry '+ident,status,{'representation':spec.get('representation','solid')},actual,float(spec.get('tolerance',1e-6)),[obj.name for obj in selected],frame,'Evaluated mesh topology and triangle-intersection checks; object-name selectors only, never roles or custom properties')
+    check['critical']=bool(spec.get('critical',True)); checks.append(check)
+   geometry_coverage[str(frame)]={'assigned':sorted(assigned),'unassigned_visible':sorted(visible-assigned)}
+   checks.append(_check('geometry_coverage','Every visible evaluated mesh has an audited representation','fail' if visible-assigned else 'pass',[],sorted(visible-assigned),0,sorted(visible),frame,'Unassigned visible geometry cannot bypass representation checks'))
+
   for feature in task.get('features',{}).get('repeated',[]):
    if feature.get('kind')!='radial_instances': continue
    patterns=[pattern.casefold() for pattern in feature.get('patterns',[])]; candidates=[obj for obj in model.all_objects if obj.type=='MESH' and not obj.hide_render and any(fnmatch.fnmatchcase(obj.name.casefold(),pattern) for pattern in patterns)]
@@ -194,7 +222,7 @@ def _main(inv):
     if b is None or c is None or d is None: checks.append(_check(ident,req,'unknown',0,None,tol,[x.name for x in names],frame,'Required pin mesh missing; measurement unavailable')); continue
     expected=_circle_upper(b,c,(d-b).length,(d-c).length); actual=None if expected is None else (d-expected).length; checks.append(_check(ident,req,'pass' if actual is not None and actual<=tol else 'fail',0,actual,tol,[x.name for x in names],frame,'Upper X-Z circle-intersection candidate from evaluated pin centers'))
   if not any(s.get('kind')=='bounds' for s in cfg.get('dimensions',[])):
-   meshes=[o for o in model.all_objects if o.type=='MESH']; verts=[v for o in meshes for v in _mesh(o,dg)[0]]; lo=[min(v[i] for v in verts) for i in range(3)]; hi=[max(v[i] for v in verts) for i in range(3)]; limits=task.get('frame',{}); expected={'min':limits.get('bounds_min'),'max':limits.get('bounds_max')}; ok=expected['min'] is not None and all(lo[i]>=expected['min'][i] and hi[i]<=expected['max'][i] for i in range(3)); checks.append(_check('evaluated_bounds','All evaluated meshes remain within task bounds','pass' if ok else 'fail',expected,{'min':lo,'max':hi},0,[o.name for o in meshes],frame,'Unconditional evaluated mesh bounds'))
+   meshes=[o for o in model.all_objects if o.type=='MESH']; verts=[v for o in meshes for v in _mesh(o,dg)[0]]; lo=[min(v[i] for v in verts) for i in range(3)]; hi=[max(v[i] for v in verts) for i in range(3)]; limits=task.get('frame',{}); expected={'min':limits.get('bounds_min'),'max':limits.get('bounds_max')}; auto_frame=(limits.get('auto_frame') or limits.get('framing_only')) is True; ok=bool(verts) if auto_frame else expected['min'] is not None and all(lo[i]>=expected['min'][i] and hi[i]<=expected['max'][i] for i in range(3)); checks.append(_check('evaluated_bounds','Evaluated mesh extents are finite' if auto_frame else 'All evaluated meshes remain within task bounds','pass' if ok else 'fail',expected,{'min':lo,'max':hi},0,[o.name for o in meshes],frame,'Finite evaluated mesh extent only when task frame is automatic; otherwise measured task bounds'))
   for s in cfg.get('intersections',[]):
    a,b=roles.get(s.get('a_role')),roles.get(s.get('b_role')); allowed=bool(s.get('allowed_mating',False)); ident=s['id']; names=[x for x in (a,b) if x]
    if not a or not b or a.type!='MESH' or b.type!='MESH': checks.append(_check(ident,s.get('requirement',ident),'unknown',None,None,0,[x.name for x in names],frame,'Required pair mesh missing; measurement unavailable')); continue
@@ -207,7 +235,7 @@ def _main(inv):
   except (ValueError, KeyError, TypeError):
    vals=[]
   actual=[min(vals),max(vals)] if vals else None; expected=s['expected']; tol=float(s.get('tolerance',0)); ok=actual is not None and all(abs(actual[i]-expected[i])<=tol for i in range(2)); checks.append(_check(s['id'],s.get('requirement',s['id']),'pass' if ok else 'fail',expected,actual,tol,[o.name] if o else [],None,'Measured controller source property across every required frame'))
- _write(inv['result_path'],{'ok':True,'source_sha256':_hash(source),'checks':checks,'passed':all(c['status']=='pass' for c in checks),'coverage':{'frames':frames,'roles':{k:(v.name if v else None) for k,v in roles.items()},'missing_roles':[k for k,v in roles.items() if not v],'materials':{'status':'assessed' if material_policy_active else 'unassessed','frames':frames if material_policy_active else [],'convention':'Direct output-linked Principled or Glass shaders only. Glass is inferred from a Glass shader, non-zero literal Principled transmission, or material name; rubber from material name. Linked color/roughness inputs, missing assignments, unlinked outputs, and unknown shaders fail an enabled policy.'},'measurement_limit':'Pivot centers are mesh-vertex centroids; clearance is a vertex-to-surface upper bound, not exact mesh-to-mesh distance.'}})
+ _write(inv['result_path'],{'ok':True,'source_sha256':_hash(source),'checks':checks,'passed':all(c['status']=='pass' for c in checks if c.get('critical',True)),'coverage':{'frames':frames,'roles':{k:(v.name if v else None) for k,v in roles.items()},'missing_roles':[k for k,v in roles.items() if not v],'materials':{'status':'assessed' if material_policy_active else 'unassessed','frames':frames if material_policy_active else [],'convention':'Direct output-linked Principled or Glass shaders only. Glass is inferred from a Glass shader, non-zero literal Principled transmission, or material name; rubber from material name. Linked color/roughness inputs, missing assignments, unlinked outputs, and unknown shaders fail an enabled policy.'},'measurement_limit':'Pivot centers are mesh-vertex centroids; clearance is a vertex-to-surface upper bound, not exact mesh-to-mesh distance.',**({'geometry':geometry_coverage} if geometry_coverage is not None else {})}})
 if __name__=='__main__':
  inv=_args()
  try: _main(inv)

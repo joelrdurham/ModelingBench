@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from .blender import STANDARD_VIEWS, run_blender
+from .budgets import require_remaining
+from .discovery import effective_task
 from .config import load_toml
 from .errors import StateError, ValidationError
 from .evidence import evidence_records
@@ -72,7 +74,7 @@ def create_checkpoint(
                 run_dir,
                 staging_dir / "model.blend",
                 staging_preview,
-                read_json(run_dir / "snapshot" / "task.json", metadata.get("task_config")),
+                effective_task(run_dir),
                 load_toml(run_dir / "snapshot" / "checkpoint_profile.toml"),
                 mode="checkpoint",
                 timeout=int(metadata["agent_profile"]["data"].get("limits", {}).get("blender_seconds", 3600)),

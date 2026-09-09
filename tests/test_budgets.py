@@ -78,6 +78,7 @@ class BudgetTests(unittest.TestCase):
         from modelbench import adapter
         profile = adapter.AgentProfile('fake', self.run / 'snapshot/agent_profile.toml', {'command': ['fake'], 'limits': {'wall_clock_seconds': 60}}, 'digest')
         class Process:
+            pid = 42
             returncode = 1
             stdin = io.StringIO()
             stdout = io.StringIO()
