@@ -15,10 +15,12 @@ dependencies = []
 [project.optional-dependencies]
 test = ["playwright"]
 reference = ["numpy>=1.26,<3", "Pillow>=10,<13", "scipy>=1.11,<2"]
+reconstruction = ["numpy>=1.26,<3", "Pillow>=10,<13", "scipy>=1.11,<2"]
 
 [project.scripts]
 modelbench = "modelbench.cli:main"
 modelbench-agent = "modelbench.agent_cli:main"
+modelbench-reconstruct = "modelbench.reconstruction.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["modelbench*"]

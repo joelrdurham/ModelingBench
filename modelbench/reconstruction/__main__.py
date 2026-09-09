@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .core import ReconstructionError, compare_receipts, load_bundle, save_bundle, solve
+from .cli import main
 
 
 def _read(path: str): return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -13,7 +13,7 @@ def _write(value, path: str | None):
     if path: Path(path).write_text(text, encoding="utf-8")
     else: print(text, end="")
 
-def main() -> int:
+def legacy_main() -> int:
     parser = argparse.ArgumentParser(prog="python -m modelbench.reconstruction")
     commands = parser.add_subparsers(dest="command", required=True)
     solve_p = commands.add_parser("solve"); solve_p.add_argument("case"); solve_p.add_argument("--output"); solve_p.add_argument("--bundle"); solve_p.add_argument("--image", action="append", default=[])
