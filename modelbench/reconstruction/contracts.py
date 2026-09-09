@@ -57,6 +57,8 @@ def records(value, name):
 def parameter(value, name, size=None, positive_only=False):
     """Numbers/vectors are fixed. Unknowns require initial and finite bounds."""
     check = (lambda x: vector(x, size, name)) if size else (lambda x: finite(x, name))
+    if isinstance(value, dict) and "fixed" in value and type(value["fixed"]) is not bool:
+        raise ReconstructionError(f"{name}.fixed must be boolean")
     if not isinstance(value, dict):
         raw = check(value)
         out = {"value": raw, "fixed": True}
@@ -128,8 +130,8 @@ def validate_case(case):
     def refs(ids, count=None):
         if not isinstance(ids, list) or (count is not None and len(ids) != count) or any(not isinstance(i, str) or i not in lids for i in ids):
             raise ReconstructionError("constraint/measurement references unknown or malformed landmarks")
-        if len(set(ids)) < min(len(ids), 2):
-            raise ReconstructionError("segment endpoints must differ")
+        if len(set(ids)) != len(ids):
+            raise ReconstructionError("landmark references must be distinct")
         return ids
 
     def segment(item):
@@ -146,6 +148,8 @@ def validate_case(case):
     data["observations"] = observations
     unsupported = []
     for term in terms:
+        if not isinstance(term.get("assumption_ids", []), list) or any(a not in assumption_ids for a in term.get("assumption_ids", [])):
+            raise ReconstructionError("constraint assumption_ids must be an array of known IDs")
         term["type"] = ALIASES.get(term.get("type"), term.get("type"))
         kind = term["type"]
         if type(term.get("required", True)) is not bool:
@@ -173,6 +177,15 @@ def validate_case(case):
             term["coordinates"] = vector(term.get("coordinates"), 3, "fixed_coordinate.coordinates", True)
             if all(v is None for v in term["coordinates"]):
                 raise ReconstructionError("fixed_coordinate requires at least one component")
+            if term.get("role") == "gauge":
+                point = next(p for p in landmarks if p["id"] == term["landmark_id"])
+                for axis, value in enumerate(term["coordinates"]):
+                    if value is None: continue
+                    fixed = point["coordinates"][axis]
+                    if fixed is not None and abs(fixed-value) > term["tolerance"]:
+                        raise ReconstructionError("numerical gauge conflicts with a fixed coordinate")
+                    if not point["bounds"][0][axis] <= value <= point["bounds"][1][axis]:
+                        raise ReconstructionError("numerical gauge is outside landmark bounds")
         elif kind == "distance":
             term["landmarks"] = segment(term)
             term["value"] = positive(term.get("value", term.get("length")), "distance.value")
@@ -188,6 +201,8 @@ def validate_case(case):
             raise ReconstructionError("constraint references unknown assumption")
     records(observations, "observations")
     for item in observations:
+        if type(item.get("required", True)) is not bool or type(item.get("uncertainty_supplied", True)) is not bool:
+            raise ReconstructionError("observation required/uncertainty_supplied must be boolean")
         refs([item.get("landmark_id")], 1)
         item.setdefault("image_id", im["id"])
         if item["image_id"] != im["id"]:
