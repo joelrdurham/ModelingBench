@@ -1,0 +1,29 @@
+﻿Titan International / Goodyear Farm Tires manufacturer catalog snapshot
+Captured: 2026-09-09
+Source: https://www.titan-intl.com/Tires/OPTITRAC?product=G0PMS6
+
+Catalog row transcribed from the manufacturer page:
+Name: LSW 1400/30R46 OPTITRAC 201D R-1W TL
+Catalog Number: G0PMS6
+Tire Size: LSW1400/30R46
+Design: Optitrac
+TT/TL: TL
+Load/Speed Index: 201D
+Recommended Rim: DH50HB
+Overall Width: 52.90 in
+Overall Diameter: 82.98 in
+Static Loaded Radius: 36.89 in
+Rolling Circumference: 249.13 in
+Weight: 1664 lb
+Tread Depth: 83/32 in
+Number of Lugs: 48
+
+Exact SI conversions used by this task (1 in = 0.0254 m):
+overall_width_m = 52.90 * 0.0254 = 1.343660 m
+overall_diameter_m = 82.98 * 0.0254 = 2.107692 m
+tread_depth_m = (83 / 32) * 0.0254 = 0.06588125 m
+nominal_46in_designation_m = 46 * 0.0254 = 1.168400 m
+
+Notes:
+- The manufacturer page describes continuous helical lug curvature and a tuned asymmetric lug shape for OPTITRAC. These are qualitative shape references.
+- The supplied DWprofile label differs from the manufacturer row's recommended-rim notation DH50HB. A 50 in inside-rim-width note is not itself treated as a conflict. The task intentionally models tire geometry only and makes no rim-engineering claim.

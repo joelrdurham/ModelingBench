@@ -30,8 +30,10 @@ def create_checkpoint(
     views: list[str] | None = None,
     diagnostic_cameras: list[dict[str, Any]] | None = None,
     observations: dict[str, Any] | None = None,
+    budget_deadline: float | None = None,
 ) -> dict[str, Any]:
     verify_run_snapshot(run_dir)
+    if budget_deadline is not None: require_remaining(budget_deadline)
     workspace = (run_dir / "workspace").resolve()
     source = resolve_within(workspace, source)
     if source.suffix.lower() != ".blend" or not source.is_file():
@@ -47,7 +49,7 @@ def create_checkpoint(
             raise StateError(f"Cannot checkpoint while run is {state['state']}")
         limit = int(read_json(run_dir / "run.json")["agent_profile"]["data"].get("limits", {}).get("max_checkpoints", 32))
         number = int(state.get("observed_checkpoints", 0)) + 1
-        if number > limit:
+        if "max_checkpoints" in read_json(run_dir / "run.json")["agent_profile"]["data"].get("limits", {}) and number > limit:
             raise StateError(f"Agent checkpoint limit exceeded ({limit})")
         checkpoint_id = f"checkpoint_{number:04d}"
         checkpoint_dir = run_dir / "checkpoints" / checkpoint_id
@@ -76,6 +78,7 @@ def create_checkpoint(
                 timeout=int(metadata["agent_profile"]["data"].get("limits", {}).get("blender_seconds", 3600)),
                 views=views,
                 diagnostic_cameras=diagnostic_cameras,
+                **({'budget_deadline': budget_deadline} if budget_deadline is not None else {}),
             )
 
             def relocate(value: Any) -> Any:
@@ -125,6 +128,6 @@ def create_checkpoint(
             "checkpoint": checkpoint_id,
             "owned_model": str(checkpoint_dir / "model.blend"),
             "previews": [str(preview_dir / ("orthographic" if view in STANDARD_VIEWS[:6] else "turntable") / f"{view}.png") for view in (views or STANDARD_VIEWS)],
-            "feedback_consumed": pending,
+            "feedback_delivered": pending,
             "pause_requested": paused,
         }

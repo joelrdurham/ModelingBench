@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ModelingBench independent review ledger",
+  "type": "object",
+  "required": [
+    "version",
+    "generation",
+    "acceptance_sha256",
+    "revisions",
+    "events",
+    "operation",
+    "tasks"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "acceptance_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "revisions": {
+      "type": "array"
+    },
+    "events": {
+      "type": "array"
+    },
+    "operation": {
+      "type": "object"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "requirement",
+          "source",
+          "instruction",
+          "history",
+          "responses"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "open",
+              "builder_addressed",
+              "verifier_resolved"
+            ]
+          },
+          "source": {
+            "enum": [
+              "measured",
+              "agent_judgment",
+              "human"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

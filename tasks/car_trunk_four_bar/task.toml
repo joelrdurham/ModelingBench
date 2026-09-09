@@ -5,6 +5,118 @@ title = "Working Car Trunk Four-Bar Linkage"
 [research]
 enabled = false
 
+[design_exploration]
+enabled = true
+concepts = 3
+refinement_rounds = 4
+cycles = 2
+
+[design_manifest]
+
+[[design_manifest.components]]
+id = 'chassis'
+name = 'Chassis/deck ground surrogate'
+quantity = 1
+role = 'fixed ground link and load reaction'
+separate_part = true
+critical = true
+required_geometric_evidence = ['A/B pivot support', 'continuous load path', 'tool access']
+
+[[design_manifest.components]]
+id = 'input_link'
+name = 'Paired input-link plates A-C'
+quantity = 2
+role = 'driving link'
+separate_part = true
+critical = true
+material_assumptions = ['metal plate concept']
+manufacturing_assumptions = ['cut plate with reinforced pin eyes and cross ties']
+required_geometric_evidence = ['paired plate spacing', 'hole edge distance', 'cross-tie continuity']
+
+[[design_manifest.components]]
+id = 'lid_coupler'
+name = 'Lid coupler C-D and rigid lid attachment'
+quantity = 1
+role = 'moving coupler and lid support'
+separate_part = true
+critical = true
+required_geometric_evidence = ['rigid panel attachment', 'C/D pin engagement', 'continuous load transfer']
+
+[[design_manifest.components]]
+id = 'follower_link'
+name = 'Paired follower-link plates B-D'
+quantity = 2
+role = 'guided follower link'
+separate_part = true
+critical = true
+material_assumptions = ['metal plate concept']
+manufacturing_assumptions = ['cut plate with reinforced pin eyes and cross ties']
+required_geometric_evidence = ['paired plate spacing', 'hole edge distance', 'cross-tie continuity']
+
+[[design_manifest.interfaces]]
+id = 'pivot_a_i'
+name = 'Ground-to-input pivot A'
+participants = ['chassis', 'input_link']
+relationship = '12 mm revolute pin joint'
+critical = true
+degrees_of_freedom = ['rotation about Y']
+mating_geometry = 'coaxial holes through both receiving plates and chassis support'
+fits = '12 mm pin/hole concept fit with explicit diameter evidence'
+engagement = 'pin traverses every receiving plate'
+clearance = 'rotating plates clear chassis across frames 1-80'
+retention = 'washers, collars, clips, or equivalent on both sides'
+load_path = 'input plates through pin into chassis'
+motion_envelope = 'continuous swept rotation from closed to open'
+verification_methods = ['hole/pin coaxiality', 'diameter and edge-distance measurements', 'section render', 'swept-volume collision trace', 'tool-access render']
+
+[[design_manifest.interfaces]]
+id = 'pivot_b_i'
+name = 'Ground-to-follower pivot B'
+participants = ['chassis', 'follower_link']
+relationship = '12 mm revolute pin joint'
+critical = true
+degrees_of_freedom = ['rotation about Y']
+mating_geometry = 'coaxial holes through both receiving plates and chassis support'
+fits = '12 mm pin/hole concept fit with explicit diameter evidence'
+engagement = 'pin traverses every receiving plate'
+clearance = 'follower plates clear chassis across frames 1-80'
+retention = 'washers, collars, clips, or equivalent on both sides'
+load_path = 'follower plates through pin into chassis'
+motion_envelope = 'continuous swept rotation from closed to open'
+verification_methods = ['hole/pin coaxiality', 'diameter and edge-distance measurements', 'section render', 'swept-volume collision trace', 'tool-access render']
+
+[[design_manifest.interfaces]]
+id = 'pivot_c_i'
+name = 'Input-to-lid coupler pivot C'
+participants = ['input_link', 'lid_coupler']
+relationship = '12 mm revolute pin joint'
+critical = true
+degrees_of_freedom = ['rotation about Y']
+mating_geometry = 'coaxial holes through paired input plates and coupler'
+fits = '12 mm pin/hole concept fit with explicit diameter evidence'
+engagement = 'pin traverses both input plates and coupler eye'
+clearance = 'links clear through the complete motion sample'
+retention = 'washers, collars, clips, or equivalent on both sides'
+load_path = 'lid/coupler through pin into paired input plates'
+motion_envelope = 'upper circle-intersection branch, frames 1-80'
+verification_methods = ['hole/pin coaxiality', 'plate spacing and engagement section', 'swept-volume collision trace', 'assembly/tool-access render']
+
+[[design_manifest.interfaces]]
+id = 'pivot_d_i'
+name = 'Follower-to-lid coupler pivot D'
+participants = ['follower_link', 'lid_coupler']
+relationship = '12 mm revolute pin joint'
+critical = true
+degrees_of_freedom = ['rotation about Y']
+mating_geometry = 'coaxial holes through paired follower plates and coupler'
+fits = '12 mm pin/hole concept fit with explicit diameter evidence'
+engagement = 'pin traverses both follower plates and coupler eye'
+clearance = 'links clear through the complete motion sample'
+retention = 'washers, collars, clips, or equivalent on both sides'
+load_path = 'lid/coupler through pin into paired follower plates and chassis'
+motion_envelope = 'upper circle-intersection branch, frames 1-80'
+verification_methods = ['hole/pin coaxiality', 'plate spacing and engagement section', 'swept-volume collision trace', 'assembly/tool-access render']
+
 [frame]
 unit_scale = 1.0
 up_axis = "+Z"
@@ -32,3 +144,216 @@ to_anchor = "fixed_front_pivot"
 value = 0.60531
 tolerance = 0.002
 unit = "m"
+
+[verification]
+frames = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]
+
+
+[verification.materials]
+enabled = true
+base_color_linear_rgb = [0.18, 0.18, 0.18]
+base_color_tolerance = 0.001
+default_roughness = 0.36
+roughness_tolerance = 0.01
+roughness_ranges = { default = [0.2, 0.8], rubber = [0.2, 0.8], glass = [0.1, 0.8] }
+
+[verification.roles]
+pivot_a = "PIVOT_A_PIN_12MM"
+pivot_b = "PIVOT_B_PIN_12MM"
+pivot_c = "PIVOT_C_PIN_12MM"
+pivot_d = "PIVOT_D_PIN_12MM"
+lid_panel = "TRUNK_LID_OUTER_PANEL"
+lid_coupler = "LINK_LID_COUPLER_CD_ROOT"
+controller = "CTRL_TRUNK_OPEN_FACTOR"
+input_plate = "LINK_INPUT_AC_PLATE_L"
+input_boss = "LINK_INPUT_AC_L_PIVOT_1_BOSS"
+follower_plate = "LINK_FOLLOWER_BD_PLATE_L"
+chassis = "CHASSIS_DECK_SURROGATE"
+
+[[verification.dimensions]]
+id = "ground_link_length"
+requirement = "Fixed anchor distance A-B"
+kind = "distance"
+from_role = "pivot_a"
+to_role = "pivot_b"
+expected = 0.60531
+tolerance = 0.002
+
+[[verification.dimensions]]
+id = "input_link_length"
+requirement = "Input link A-C remains rigid"
+kind = "distance"
+from_role = "pivot_a"
+to_role = "pivot_c"
+expected = 0.44
+tolerance = 0.003
+
+[[verification.dimensions]]
+id = "coupler_link_length"
+requirement = "Lid coupler C-D remains rigid"
+kind = "distance"
+from_role = "pivot_c"
+to_role = "pivot_d"
+expected = 0.58
+tolerance = 0.003
+
+[[verification.dimensions]]
+id = "follower_link_length"
+requirement = "Follower link B-D remains rigid"
+kind = "distance"
+from_role = "pivot_b"
+to_role = "pivot_d"
+expected = 0.56
+tolerance = 0.003
+
+[[verification.dimensions]]
+id = "evaluated_bounds"
+requirement = "All evaluated meshes remain within task bounds"
+kind = "bounds"
+expected = { min = [-0.75, -0.45, 0.0], max = [1.05, 0.45, 1.55] }
+tolerance = 0.000001
+
+[[verification.dimensions]]
+id = "lid_panel_size"
+requirement = "Lid panel is approximately 1.10 by 0.68 m"
+kind = "panel_size"
+role = "lid_panel"
+expected = [1.10, 0.68]
+tolerance = 0.02
+
+[[verification.controllers]]
+id = "open_controller_range"
+requirement = "Controller open_factor source property spans 0 to 1"
+role = "controller"
+data_path = '["open_factor"]'
+expected = [0.0, 1.0]
+tolerance = 0.002
+
+[[verification.dimensions]]
+id = "input_angle"
+frame = 1
+requirement = "Input A-C travels from 80 to -10 degrees"
+kind = "angle_xz"
+from_role = "pivot_a"
+to_role = "pivot_c"
+expected = 80.0
+tolerance = 0.05
+
+[[verification.dimensions]]
+id = "input_angle_open"
+frame = 80
+requirement = "Input A-C reaches -10 degrees at frame 80"
+kind = "angle_xz"
+from_role = "pivot_a"
+to_role = "pivot_c"
+expected = -10.0
+tolerance = 0.05
+
+
+
+[[verification.dimensions]]
+id = "lid_panel_rigid_to_coupler"
+requirement = "Lid panel remains rigidly attached to its coupler"
+kind = "relative_transform"
+role = "lid_panel"
+relative_to_role = "lid_coupler"
+tolerance = 0.0001
+
+[[verification.intersections]]
+id = "input_follower_clearance"
+requirement = "Input and follower plates do not intersect"
+a_role = "input_plate"
+b_role = "follower_plate"
+allowed_mating = false
+
+[[verification.intersections]]
+id = "input_link_boss_mating"
+requirement = "Input plate-to-boss construction mating is explicitly allowed"
+a_role = "input_plate"
+b_role = "input_boss"
+allowed_mating = true
+[[verification.dimensions]]
+id = "upper_circle_intersection_branch"
+requirement = "D uses the upper B-D/C-D circle-intersection branch on every frame"
+kind = "upper_branch"
+a_role = "pivot_a"
+b_role = "pivot_b"
+c_role = "pivot_c"
+d_role = "pivot_d"
+tolerance = 0.003
+
+[assembly]
+
+[[assembly.components]]
+id = "chassis"
+kind = "environment"
+roles = ["chassis", "pivot_a", "pivot_b"]
+
+[[assembly.components]]
+id = "input_link"
+kind = "link"
+roles = ["input_plate", "pivot_a", "pivot_c"]
+
+[[assembly.components]]
+id = "lid_coupler"
+kind = "link"
+roles = ["lid_coupler", "lid_panel", "pivot_c", "pivot_d"]
+
+[[assembly.components]]
+id = "follower_link"
+kind = "link"
+roles = ["follower_plate", "pivot_b", "pivot_d"]
+
+
+[[assembly.interfaces]]
+id = "pivot_a_i"
+role = "pivot_a"
+components = ["chassis", "input_link"]
+
+[[assembly.interfaces]]
+id = "pivot_b_i"
+role = "pivot_b"
+components = ["chassis", "follower_link"]
+
+[[assembly.interfaces]]
+id = "pivot_c_i"
+role = "pivot_c"
+components = ["input_link", "lid_coupler"]
+
+[[assembly.interfaces]]
+id = "pivot_d_i"
+role = "pivot_d"
+components = ["lid_coupler", "follower_link"]
+
+[[assembly.constraints]]
+id = "ab_fixed"
+kind = "fixed"
+interfaces = ["pivot_a_i", "pivot_b_i"]
+resolved_by = "chassis"
+
+[[assembly.constraints]]
+id = "ac_rigid"
+kind = "rigid"
+interfaces = ["pivot_a_i", "pivot_c_i"]
+resolved_by = "input_link"
+
+[[assembly.constraints]]
+id = "cd_rigid"
+kind = "rigid"
+interfaces = ["pivot_c_i", "pivot_d_i"]
+resolved_by = "lid_coupler"
+
+[[assembly.constraints]]
+id = "bd_rigid"
+kind = "rigid"
+interfaces = ["pivot_b_i", "pivot_d_i"]
+resolved_by = "follower_link"
+
+[assembly.ground_resolution]
+mode = "chassis"
+interfaces = ["pivot_a_i", "pivot_b_i"]
+environment_component = "chassis"
+interface_tolerance = 0.08
+redundant_link_tolerance = 0.08
+
+prohibited_geometry_patterns = ["LINK_GROUND_AB*"]

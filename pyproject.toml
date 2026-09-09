@@ -12,6 +12,10 @@ license = {text = "MIT"}
 authors = [{name = "ModelingBench contributors"}]
 dependencies = []
 
+[project.optional-dependencies]
+test = ["playwright"]
+reference = ["numpy>=1.26,<3", "Pillow>=10,<13", "scipy>=1.11,<2"]
+
 [project.scripts]
 modelbench = "modelbench.cli:main"
 modelbench-agent = "modelbench.agent_cli:main"
@@ -23,3 +27,6 @@ include = ["modelbench*"]
 testpaths = ["tests"]
 addopts = "-q"
 
+
+[tool.setuptools.package-data]
+modelbench = ["ui/*.html", "ui/*.css", "ui/*.js"]

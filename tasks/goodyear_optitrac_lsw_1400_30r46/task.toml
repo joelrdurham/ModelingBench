@@ -1,0 +1,134 @@
+version = 1
+id = "goodyear_optitrac_lsw_1400_30r46"
+title = "Goodyear Optitrac LSW 1400/30R46 Agricultural Tire"
+
+[research]
+enabled = true
+
+[design_exploration]
+enabled = true
+concepts = 3
+refinement_rounds = 4
+cycles = 2
+
+[design_manifest]
+
+[[design_manifest.components]]
+id = 'tire_body'
+name = 'Tire carcass, bead region, sidewalls, and tread base'
+quantity = 1
+role = 'load-carrying tire body'
+separate_part = true
+critical = true
+material_assumptions = ['unladen rubber tire']
+manufacturing_assumptions = ['molded radial agricultural tire; visual concept only']
+required_geometric_evidence = ['cross-sectional profile', 'circular unladen silhouette', 'sidewall text placement', 'tread-base radius']
+
+[[design_manifest.components]]
+id = 'rim_mating_envelope'
+name = 'Nominal 46-inch bead/rim mating envelope; reference only, not modeled hardware'
+quantity = 1
+role = 'interface datum'
+separate_part = false
+critical = false
+required_geometric_evidence = ['bead opening section without fabricated rim geometry']
+
+[[design_manifest.interfaces]]
+id = 'bead_rim_mating'
+name = 'Tire bead to nominal rim envelope'
+participants = ['tire_body', 'rim_mating_envelope']
+relationship = 'retained radial bead seat'
+critical = true
+degrees_of_freedom = []
+mating_geometry = 'paired bead seats around the Y axle with nominal 1.1684 m rim designation'
+fits = 'plausible tire-to-rim mating profile; no production fit claim'
+engagement = 'continuous circumferential bead engagement'
+clearance = 'opening remains clear of invented rim, hub, or support geometry'
+retention = 'bead geometry supplies the conceptual radial/axial retention'
+load_path = 'tread and sidewall into bead region'
+motion_envelope = 'static unladen tire at frame 1'
+verification_methods = ['Y-axis section', 'bead/opening diameter measurement', 'tire-only mesh inventory']
+
+[[design_manifest.repeated_features]]
+id = 'principal_lugs'
+component_id = 'tire_body'
+feature = 'individual R-1W principal tread lug'
+expected_count = 48
+pattern = 'angular about Y with intended left/right axial phase and asymmetry'
+spacing_or_phase = 'uniform circumferential pitch with controlled left/right phase'
+representative_dimensions = { radial_depth_m = 0.06588125 }
+symmetry_rules = 'paired left/right population with intentionally asymmetric lug shape'
+malformed_instance_criteria = ['missing or duplicated lug', 'angular or axial mis-spacing', 'flat rectangular strip', 'broken helical continuity', 'wrong radial depth']
+verification_methods = ['evaluated instance inventory', 'angular/axial phase analysis', 'radial depth samples', 'cross-section', 'controlled renders']
+critical = true
+
+[frame]
+unit_scale = 1.0
+up_axis = "+Z"
+front_axis = "-Y"
+evaluation_center = [0.0, 0.0, 1.053846]
+bounds_min = [-1.10, -0.70, -0.05]
+bounds_max = [1.10, 0.70, 2.16]
+ground_plane = false
+evaluation_frame = 1
+
+[[anchors]]
+name = "tire_center"
+position = [0.0, 0.0, 1.053846]
+tolerance = 0.02
+
+[verification]
+frames = [1]
+
+[verification.materials]
+enabled = true
+base_color_linear_rgb = [0.18, 0.18, 0.18]
+base_color_tolerance = 0.001
+default_roughness = 0.36
+roughness_tolerance = 0.01
+roughness_ranges = { default = [0.2, 0.8], rubber = [0.2, 0.8], glass = [0.1, 0.8] }
+
+[[verification.dimensions]]
+id = "overall_diameter_x"
+requirement = "Evaluated MODEL geometry has the catalog overall diameter on X"
+kind = "extent"
+axis = 0
+expected = 2.107692
+tolerance = 0.01
+
+[[verification.dimensions]]
+id = "overall_width_y"
+requirement = "Evaluated MODEL geometry has the catalog overall width on Y"
+kind = "extent"
+axis = 1
+expected = 1.343660
+tolerance = 0.01
+
+[[verification.dimensions]]
+id = "overall_diameter_z"
+requirement = "Evaluated MODEL geometry has the catalog overall diameter on Z"
+kind = "extent"
+axis = 2
+expected = 2.107692
+tolerance = 0.01
+
+[[verification.dimensions]]
+id = "evaluated_bounds"
+requirement = "All evaluated tire meshes remain inside the tire-only evaluation envelope"
+kind = "bounds"
+expected = { min = [-1.10, -0.70, -0.05], max = [1.10, 0.70, 2.16] }
+tolerance = 0.000001
+
+[features]
+
+[[features.repeated]]
+id = "principal_lugs"
+kind = "radial_instances"
+patterns = ["TIRE_LUG_*"]
+axis = 1
+center = [0.0, 0.0, 1.053846]
+count = 48
+spacing_tolerance = 0.08
+depth = 0.06588125
+depth_tolerance = 0.008
+base_radius = 0.98796475

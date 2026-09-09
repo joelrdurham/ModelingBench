@@ -95,10 +95,12 @@ class TaskDefinition:
 def load_task(root: Path, task_id: str) -> TaskDefinition:
     ensure_id(task_id, "task ID")
     raw_directory = root / "tasks" / task_id
+    if not raw_directory.exists() and task_id.startswith("brief_"):
+        raw_directory = root / "generated" / "briefs" / "tasks" / task_id
     if is_link(raw_directory):
         raise ValidationError("Task directory may not be a link or junction")
     directory = raw_directory.resolve()
-    tasks_root = (root / "tasks").resolve()
+    tasks_root = raw_directory.parent.resolve()
     try:
         directory.relative_to(tasks_root)
     except ValueError as exc:
@@ -116,8 +118,15 @@ def load_task(root: Path, task_id: str) -> TaskDefinition:
         raise ValidationError(f"Task trees may not contain links or junctions: {linked[0]}")
 
     config = load_toml(task_file)
-    if config.get("version") != 1:
-        raise ValidationError("task.toml version must be 1")
+    if config.get("version") not in (1, 2):
+        raise ValidationError("task.toml version must be 1 or 2")
+    discovered = config.get('version') == 2 and config.get('specification_mode') == 'discovered'
+    if config.get('version') == 2 and not discovered:
+        raise ValidationError('v2 requires specification_mode=discovered')
+    if discovered:
+        from .discovery import default_frame
+        config['frame'] = {**default_frame(), **config.get('frame', {})}
+        config.setdefault('research', {'enabled': True, 'mode': 'live'})
     if config.get("id") != task_id:
         raise ValidationError(f"task.toml id must match directory name {task_id!r}")
     if not isinstance(config.get("title"), str) or not config["title"].strip():
@@ -180,6 +189,105 @@ def load_task(root: Path, task_id: str) -> TaskDefinition:
         if not isinstance(dimension.get("unit"), str) or not dimension["unit"]:
             raise ValidationError(f"Dimension {name} requires a unit")
 
+    verification = config.get('verification', {})
+    if not isinstance(verification, dict):
+        raise ValidationError('verification must be a table')
+    if 'frames' in verification:
+        frames = verification['frames']
+        if not isinstance(frames, list) or not frames or any(isinstance(f, bool) or not isinstance(f, int) or f < 1 for f in frames) or len(set(frames)) != len(frames):
+            raise ValidationError('verification.frames must contain unique positive integer frames')
+    materials = verification.get('materials')
+    # Legacy v1 tasks may omit the later global material policy entirely.
+    if materials is not None and (not isinstance(materials, dict) or materials.get('enabled') is not True):
+        raise ValidationError('verification.materials must enable the global gray-shaded material policy when declared')
+    if materials is not None and _vec3(materials.get('base_color_linear_rgb'), 'verification.materials.base_color_linear_rgb') != (0.18, 0.18, 0.18):
+        raise ValidationError('verification.materials.base_color_linear_rgb must be [0.18, 0.18, 0.18]')
+    for key, expected in (('base_color_tolerance', 0.001), ('default_roughness', 0.36), ('roughness_tolerance', 0.01)):
+        if materials is not None and materials.get(key) != expected:
+            raise ValidationError(f'verification.materials.{key} must be {expected}')
+    ranges = materials.get('roughness_ranges') if materials is not None else None
+    expected_ranges = {'default': [0.2, 0.8], 'rubber': [0.2, 0.8], 'glass': [0.1, 0.8]}
+    if materials is not None and ranges != expected_ranges:
+        raise ValidationError('verification.materials.roughness_ranges must define the global, rubber, and glass policy ranges')
+    roles = verification.get('roles', {})
+    if not isinstance(roles, dict) or any(not isinstance(v, str) or not v for v in roles.values()):
+        raise ValidationError('verification.roles must map role names to geometry names')
+    for check in verification.get('dimensions', []):
+        if not isinstance(check, dict) or not check.get('id') or check.get('kind', 'distance') not in {'distance','angle_xz','panel_size','bounds','relative_transform','upper_branch','extent'}:
+            raise ValidationError('Unknown or malformed verification dimension')
+        if check.get('kind') == 'extent':
+            axis, expected = check.get('axis'), check.get('expected')
+            if isinstance(axis, bool) or axis not in (0, 1, 2):
+                raise ValidationError('Extent axis must be 0, 1, or 2 in world coordinates')
+            if isinstance(expected, bool) or not isinstance(expected, (int, float)) or not __import__('math').isfinite(expected) or expected <= 0:
+                raise ValidationError('Extent expected value must be finite and positive')
+        tolerance = check.get('tolerance', 0)
+        if isinstance(tolerance, bool) or not isinstance(tolerance, (float, int)) or not __import__('math').isfinite(tolerance) or tolerance < 0:
+            raise ValidationError('Verification tolerances must be finite and nonnegative')
+        for key in ('from_role','to_role','role','relative_to_role','b_role','c_role','d_role'):
+            if key in check and check[key] not in roles:
+                raise ValidationError('Verification check references unknown role: ' + check[key])
+
+    # Optional declarative mechanism manifest; tasks without one retain v1 behavior.
+    assembly = config.get('assembly')
+    if assembly is not None:
+        if not isinstance(assembly, dict):
+            raise ValidationError('assembly must be a table')
+        components, interfaces, constraints = (assembly.get(key, []) for key in ('components', 'interfaces', 'constraints'))
+        if not all(isinstance(items, list) for items in (components, interfaces, constraints)):
+            raise ValidationError('assembly components, interfaces, and constraints must be arrays of tables')
+        component_kinds: dict[str, str] = {}
+        for component in components:
+            if not isinstance(component, dict): raise ValidationError('Every assembly component must be a table')
+            ident = ensure_id(str(component.get('id', '')), 'assembly component ID')
+            if ident in component_kinds: raise ValidationError(f'Duplicate assembly component: {ident}')
+            kind = component.get('kind')
+            if kind not in {'link', 'environment'}: raise ValidationError(f'Assembly component {ident} kind must be link or environment')
+            names = component.get('roles', [])
+            if not isinstance(names, list) or not names or any(name not in roles for name in names): raise ValidationError(f'Assembly component {ident} must reference one or more verification roles')
+            component_kinds[ident] = kind
+        interface_ids: set[str] = set()
+        for interface in interfaces:
+            if not isinstance(interface, dict): raise ValidationError('Every assembly interface must be a table')
+            ident = ensure_id(str(interface.get('id', '')), 'assembly interface ID')
+            if ident in interface_ids: raise ValidationError(f'Duplicate assembly interface: {ident}')
+            interface_ids.add(ident)
+            if interface.get('role') not in roles: raise ValidationError(f'Assembly interface {ident} references an unknown role')
+            owners = interface.get('components', [])
+            if not isinstance(owners, list) or len(owners) != 2 or any(owner not in component_kinds for owner in owners): raise ValidationError(f'Assembly interface {ident} must join exactly two declared components')
+        for constraint in constraints:
+            if not isinstance(constraint, dict): raise ValidationError('Every assembly constraint must be a table')
+            ensure_id(str(constraint.get('id', '')), 'assembly constraint ID')
+            endpoints = constraint.get('interfaces', [])
+            if constraint.get('kind') not in {'rigid', 'fixed'} or not isinstance(endpoints, list) or len(endpoints) != 2 or any(item not in interface_ids for item in endpoints): raise ValidationError('Assembly constraints must be rigid/fixed and reference exactly two interfaces')
+            resolved_by = constraint.get('resolved_by')
+            if resolved_by not in component_kinds: raise ValidationError('Assembly constraint resolved_by must be a declared component')
+            if constraint['kind'] == 'fixed' and component_kinds[resolved_by] != 'environment': raise ValidationError('Fixed assembly constraints must be resolved by an environment component')
+        ground = assembly.get('ground_resolution')
+        if ground is not None:
+            if not isinstance(ground, dict) or ground.get('environment_component') not in component_kinds or component_kinds.get(ground.get('environment_component')) != 'environment':
+                raise ValidationError('assembly.ground_resolution requires a declared environment_component')
+    features = config.get('features', {})
+    if not isinstance(features, dict) or not isinstance(features.get('repeated', []), list): raise ValidationError('features.repeated must be an array when declared')
+    for feature in features.get('repeated', []):
+        if not isinstance(feature, dict) or feature.get('kind') != 'radial_instances': raise ValidationError('Repeated feature kind must be radial_instances')
+        ensure_id(str(feature.get('id', '')), 'feature ID')
+        if not isinstance(feature.get('patterns'), list) or not feature['patterns'] or not all(isinstance(x, str) and x for x in feature['patterns']): raise ValidationError('Repeated feature requires patterns')
+        if feature.get('axis') not in (0, 1, 2) or not isinstance(feature.get('count'), int) or feature['count'] < 1: raise ValidationError('Repeated feature requires axis and positive count')
+        _vec3(feature.get('center'), 'repeated feature center')
+        for key in ('spacing_tolerance', 'depth', 'depth_tolerance'):
+            if isinstance(feature.get(key), bool) or not isinstance(feature.get(key), (int, float)) or feature[key] < 0: raise ValidationError('Repeated feature '+key+' must be nonnegative')
+    exploration = config.get('design_exploration')
+    if exploration is not None:
+        if not isinstance(exploration, dict) or exploration.get('enabled') is not True:
+            raise ValidationError('design_exploration must be an enabled table when declared')
+        for key, expected in (('concepts', 3), ('refinement_rounds', 4), ('cycles', 2)):
+            value = exploration.get(key, expected)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValidationError('design_exploration limits must be positive integers')
+    from .design import parse_design_manifest
+    if not discovered:
+        parse_design_manifest(config)
     manifest = load_toml(manifest_file)
     if manifest.get("version") != 1:
         raise ValidationError("inputs/manifest.toml version must be 1")
@@ -328,10 +436,17 @@ def load_render_profile(root: Path, name: str) -> RenderProfile:
         "color_depth": 8,
         "resolution_percentage": 100,
         "background": "neutral",
+        "background_color": [0.12, 0.12, 0.12, 1.0],
+        "background_strength": 1.0,
         "material": "neutral_gray",
+        "base_color": [0.18, 0.18, 0.18, 1.0],
+        "roughness_default": 0.36,
+        "roughness_min": 0.2,
+        "roughness_max": 0.8,
+        "glass_roughness": 0.1,
     }
     for key, expected in required.items():
-        if data.get(key) != expected:
+        if key in data and data.get(key) != expected:
             raise ValidationError(f"{name}.{key} must be {expected!r}, got {data.get(key)!r}")
     for key in ("samples", "resolution"):
         value = data.get(key)

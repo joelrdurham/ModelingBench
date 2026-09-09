@@ -214,19 +214,21 @@ def handle_result(root: Path, generated: Path, run_dir: Path, result: AgentResul
     return {"run": run_name, "state": "promoted", "publication": publication}
 
 
-def run_new(root: Path, task_id: str, agent_name: str) -> dict[str, Any]:
+def run_new(root: Path, task_id: str, agent_name: str, verifier_name: str | None = None, overrides: dict | None = None, budget_seconds: int | None = None) -> dict[str, Any]:
     generated = ensure_generated_root(root)
     with OperationLock(generated, "run", task_id):
         run_dir: Path | None = None
         try:
             run_dir, agent = prepare_new_run(root, task_id, agent_name)
-            return handle_result(root, generated, run_dir, run_adapter(root, run_dir, agent))
+            from .automation import configure, run_loop
+            configure(root, run_dir, agent, verifier_name or agent_name, overrides, budget_seconds)
+            return run_loop(root, generated, run_dir)
         except KeyboardInterrupt:
-            if run_dir:
+            if run_dir and not (run_dir / "review.json").exists():
                 _record_interrupt(run_dir)
             raise
         except Exception as exc:
-            if run_dir and load_state(run_dir)["state"] not in {"failed", "promoted"}:
+            if run_dir and load_state(run_dir)["state"] not in {"failed", "promoted", "interrupted", "cancelled"}:
                 fail(run_dir, "orchestration", str(exc))
             raise
 
@@ -234,6 +236,8 @@ def run_new(root: Path, task_id: str, agent_name: str) -> dict[str, Any]:
 def continue_run(root: Path, identifier: str) -> dict[str, Any]:
     generated = ensure_generated_root(root)
     run_dir = resolve_run(generated, identifier)
+    if (run_dir / 'review.json').exists():
+        return resume_automated(root, identifier)
     with OperationLock(generated, "continue", f"{run_dir.parents[1].name}/{run_dir.name}"):
         state = load_state(run_dir)
         failure = state.get("failure") or {}
@@ -279,6 +283,8 @@ def continue_run(root: Path, identifier: str) -> dict[str, Any]:
 def resume_evaluation(root: Path, identifier: str) -> dict[str, Any]:
     generated = ensure_generated_root(root)
     run_dir = resolve_run(generated, identifier)
+    if (run_dir / 'review.json').exists():
+        return resume_automated(root, identifier)
     with OperationLock(generated, "resume", f"{run_dir.parents[1].name}/{run_dir.name}"):
         state = load_state(run_dir)
         if state["state"] not in {"failed", "interrupted"}:
@@ -298,3 +304,87 @@ def resume_evaluation(root: Path, identifier: str) -> dict[str, Any]:
             _record_interrupt(run_dir)
             raise
         return {"run": f"{state['task_id']}/{state['run_id']}", "state": "promoted", "publication": publication}
+
+
+def resume_automated(root: Path, identifier: str, additional_budget_seconds: int | None = None):
+    from .automation import run_loop, reset_retries
+    from .review import lock, event, load, save
+    if additional_budget_seconds is not None and additional_budget_seconds <= 0:
+        raise StateError('Additional budget must be positive')
+    generated = ensure_generated_root(root)
+    run_dir = resolve_run(generated, identifier)
+    with OperationLock(generated, 'resume', identifier):
+        with lock(run_dir):
+            if load_state(run_dir)['state'] in {'completed', 'promoted', 'cancelled'}:
+                raise StateError('Run is immutable; create a revision run')
+            if additional_budget_seconds is not None:
+                ledger = load(run_dir)
+                if read_json(run_dir / 'automation.json', {}).get('budget_seconds') is None:
+                    raise StateError('Run has no overall budget to extend')
+                grant = {'seconds': additional_budget_seconds, 'at': utc_now()}
+                ledger.setdefault('budget_grants', []).append(grant)
+                event(ledger, 'budget_granted', **grant)
+                save(run_dir, ledger)
+            control = read_json(run_dir / 'control.json', {})
+            control['pause_requested'] = False
+            atomic_write_json(run_dir / 'control.json', control)
+        reset_retries(run_dir)
+        return run_loop(root, generated, run_dir)
+
+
+def create_revision(root: Path, identifier: str, execute=True):
+    from .automation import configure, run_loop
+    from .review import register_revision
+    generated = ensure_generated_root(root)
+    source_run = resolve_run(generated, identifier)
+    source_state = load_state(source_run)
+    source_artifact = source_state.get('artifact')
+    if not source_artifact:
+        raise StateError('Source run has no owned artifact')
+    source = resolve_within(source_run, source_artifact['path'])
+    if sha256_file(source) != source_artifact['sha256']:
+        raise StateError('Source artifact integrity check failed')
+    with OperationLock(generated, 'revise', identifier):
+        run_dir, builder = prepare_new_run(root, source_state['task_id'], read_json(source_run / 'run.json')['agent_profile']['name'])
+        configure(root, run_dir, builder, read_json(source_run / 'automation.json', {}).get('verifier', builder.name))
+        supporting = []
+        for script in sorted((source_run / 'workspace').rglob('*.py')):
+            if not script.is_symlink():
+                target = run_dir / 'workspace' / 'inherited_support' / script.relative_to(source_run / 'workspace')
+                copy_file_owned(script, target)
+                supporting.append({'path': target.relative_to(run_dir).as_posix(), 'sha256': sha256_file(target), 'provenance': 'Inherited supporting script; historical execution settings Not recorded unless separately available'})
+        # Keep the source run's construction evidence available to an independent
+        # verifier without treating inherited claims as new verification.
+        from .evidence import evidence_records, register_evidence
+        inherited = {record['sha256'] for record in evidence_records(run_dir)}
+        for record in evidence_records(source_run):
+            evidence_path = resolve_within(source_run, record['local_path'])
+            if sha256_file(evidence_path) != record['sha256']:
+                raise StateError('Inherited supporting evidence integrity check failed')
+            if record['sha256'] in inherited:
+                continue
+            owned_record = register_evidence(run_dir, evidence_path, origin=record['origin'],
+                title='Inherited: ' + record.get('title', evidence_path.name),
+                notes=f"Supporting evidence from {identifier}; original source kind retained. Not a verification of this revision.")
+            inherited.add(owned_record['sha256'])
+        for trace in sorted((source_run / 'logs').glob('agent_turn_*.stdout.log')):
+            if not trace.is_symlink():
+                register_evidence(run_dir, trace, origin='provided',
+                    title='Historical seed execution trace: ' + trace.name,
+                    notes=f"Execution trace from {identifier}; historical model settings are not inferred from this file.")
+        provenance = source_run / 'model-settings.json'
+        if provenance.is_file() and not provenance.is_symlink():
+            register_evidence(run_dir, provenance, origin='provided',
+                title='Historical seed invocation settings',
+                notes=f"Recorded settings from {identifier}; unavailable runtime confirmation remains Not recorded.")
+        atomic_write_json(run_dir / 'inherited-support.json', supporting)
+        destination = run_dir / 'workspace' / 'seed.blend'
+        copy_file_owned(source, destination)
+        owned = _owned_submission(run_dir, AgentResult('submitted', str(destination), 'seed', None, False, 'Owned revision seed'))
+        register_revision(run_dir, owned)
+        from .review import stage
+        stage(run_dir, 'measurements')
+        atomic_write_json(run_dir / 'parent.json', {'run': identifier, 'artifact_sha256': source_artifact['sha256']})
+        if execute:
+            return run_loop(root, generated, run_dir)
+        return {'run': f"{source_state['task_id']}/{run_dir.name}", 'state': load_state(run_dir)['state']}

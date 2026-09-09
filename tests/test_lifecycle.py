@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from modelbench.adapter import _agent_environment
+from modelbench.adapter import _agent_environment, build_agent_prompt
 from modelbench.agent_cli import _context
 from modelbench.checkpoints import create_checkpoint
 from modelbench.errors import StateError, ValidationError
@@ -30,6 +30,15 @@ class LifecycleTests(unittest.TestCase):
         self.rendering.close()
         self.project.cleanup()
 
+    def test_agent_prompt_includes_render_material_contract(self):
+        run_dir, _ = prepare_new_run(self.project.root, "example_drawing_object", "fake_test")
+        prompt = build_agent_prompt(run_dir)
+        self.assertIn("Base Color RGB (0.18, 0.18, 0.18)", prompt)
+        self.assertIn("Roughness 0.36 by default", prompt)
+        self.assertIn("vary from 0.2 to 0.8", prompt)
+        self.assertIn("Glass may use Roughness 0.1", prompt)
+        self.assertIn("modelbench_roughness_override", prompt)
+
     def test_successive_runs_promote_without_losing_history(self):
         first = run_new(self.project.root, "example_drawing_object", "fake_test")
         second = run_new(self.project.root, "example_drawing_object", "fake_test")
@@ -45,7 +54,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertTrue(all(item["path"].endswith(".png") for item in current["renders"]))
         self.assertTrue((generated / "example_drawing_object" / "current" / "renders" / "invocation.json").is_file())
 
-    def test_checkpoint_consumes_feedback_and_honors_pause(self):
+    def test_checkpoint_delivers_feedback_without_resolving_and_honors_pause(self):
         run_dir, _ = prepare_new_run(self.project.root, "example_greybox_level", "fake_test")
         workspace_model = run_dir / "workspace" / "working.blend"
         workspace_model.write_bytes(b"fake blend")
@@ -55,9 +64,9 @@ class LifecycleTests(unittest.TestCase):
         atomic_write_json(run_dir / "control.json", control)
         result = create_checkpoint(self.project.root, run_dir, workspace_model, "blockout", views=["front", "top"])
         self.assertEqual(result["checkpoint"], "checkpoint_0001")
-        self.assertEqual(result["feedback_consumed"][0]["id"], feedback["id"])
+        self.assertEqual(result["feedback_delivered"][0]["id"], feedback["id"])
         self.assertTrue(result["pause_requested"])
-        self.assertEqual(pending_feedback(run_dir), [])
+        self.assertEqual(pending_feedback(run_dir), [feedback])
         self.assertEqual(load_state(run_dir)["state"], "awaiting_feedback")
         self.assertTrue((run_dir / "checkpoints" / "checkpoint_0001" / "model.blend").is_file())
 
@@ -104,9 +113,9 @@ class LifecycleTests(unittest.TestCase):
         workspace_model.write_bytes(b"fake blend")
         create_checkpoint(self.project.root, run_dir, workspace_model, "review", views=["front"])
         fail(run_dir, "orchestration", "simulated post-checkpoint lifecycle fault")
-        completed = continue_run(self.project.root, "example_drawing_object/run_000001")
-        self.assertEqual(completed["state"], "promoted")
-        self.assertIsNone(load_state(run_dir)["failure"])
+        with self.assertRaisesRegex(StateError, 'Independent verification Not recorded'):
+            continue_run(self.project.root, "example_drawing_object/run_000001")
+        self.assertFalse((run_dir.parents[1] / 'current.json').exists())
 
     def test_resume_uses_owned_artifact_without_agent(self):
         result = run_new(self.project.root, "example_drawing_object", "fake_test")
@@ -127,7 +136,7 @@ class LifecycleTests(unittest.TestCase):
                 run_new(self.project.root, "example_drawing_object", "fake_test")
         generated = ensure_generated_root(self.project.root)
         run_dir = resolve_run(generated, "example_drawing_object/run_000001")
-        self.assertEqual(load_state(run_dir)["state"], "failed")
+        self.assertEqual(load_state(run_dir)["state"], "interrupted")
         self.assertTrue((run_dir / "renders" / "final" / "blender_result.json").is_file())
         with patch("modelbench.orchestrator.run_blender") as rerender:
             publication = resume_evaluation(self.project.root, "example_drawing_object/run_000001")
@@ -142,9 +151,7 @@ class LifecycleTests(unittest.TestCase):
         run_dir = resolve_run(generated, "example_drawing_object/run_000001")
         state = load_state(run_dir)
         self.assertEqual(state["state"], "interrupted")
-        self.assertEqual(state["failure"]["stage"], "evaluation")
-        with self.assertRaisesRegex(StateError, "must use resume"):
-            continue_run(self.project.root, "example_drawing_object/run_000001")
+        self.assertEqual(state["failure"]["stage"], "automation")
         publication = resume_evaluation(self.project.root, "example_drawing_object/run_000001")
         self.assertEqual(publication["state"], "promoted")
 
@@ -155,7 +162,7 @@ class LifecycleTests(unittest.TestCase):
             return result
 
         with patch("modelbench.orchestrator.run_blender", side_effect=mutate_artifact):
-            with self.assertRaisesRegex(StateError, "hash changed"):
+            with self.assertRaisesRegex(StateError, "artifact changed"):
                 run_new(self.project.root, "example_drawing_object", "fake_test")
         generated = ensure_generated_root(self.project.root)
         self.assertFalse((generated / "example_drawing_object" / "current.json").exists())
@@ -163,8 +170,9 @@ class LifecycleTests(unittest.TestCase):
     def test_incomplete_final_render_set_blocks_publication(self):
         def incomplete_render(*args, **kwargs):
             result = fake_render(*args, **kwargs)
-            missing = Path(result["renders"].pop()["path"])
-            missing.unlink()
+            if kwargs.get("mode") == "final":
+                missing = Path(result["renders"].pop()["path"])
+                missing.unlink()
             return result
 
         with patch("modelbench.orchestrator.run_blender", side_effect=incomplete_render):

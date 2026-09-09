@@ -217,17 +217,94 @@ def _strict_configuration(profile: dict) -> tuple[object, str]:
     return matched, scene
 
 
-def _neutralize(collection):
-    material = bpy.data.materials.new("MB_NEUTRAL_GRAY")
-    material.diffuse_color = (0.5, 0.5, 0.5, 1.0)
+def _active_surface_shader(material):
+    if material is None or not material.use_nodes or material.node_tree is None:
+        return None
+    outputs = [node for node in material.node_tree.nodes if node.type == "OUTPUT_MATERIAL"]
+    output = next((node for node in outputs if node.is_active_output), outputs[0] if outputs else None)
+    if output is None:
+        return None
+    surface = output.inputs.get("Surface")
+    if surface is None or not surface.is_linked or len(surface.links) != 1:
+        return None
+    return surface.links[0].from_node
+
+
+def _source_roughness(material, profile: dict) -> float:
+    default = float(profile["roughness_default"])
+    shader = _active_surface_shader(material)
+    if shader is None or shader.type not in {"BSDF_GLASS", "BSDF_PRINCIPLED"}:
+        return default
+    roughness = shader.inputs.get("Roughness")
+    if roughness is None or roughness.is_linked:
+        return default
+    candidate = float(roughness.default_value)
+    if not math.isfinite(candidate):
+        return default
+    is_glass = shader.type == "BSDF_GLASS" or "glass" in material.name.lower()
+    if shader.type == "BSDF_PRINCIPLED":
+        transmission = shader.inputs.get("Transmission Weight")
+        if transmission is None:
+            transmission = shader.inputs.get("Transmission")
+        if transmission is not None and not transmission.is_linked:
+            is_glass = is_glass or float(transmission.default_value) > 0.0
+        if (
+            math.isclose(candidate, 0.5, rel_tol=0.0, abs_tol=1e-6)
+            and material.get("modelbench_roughness_override", False) is not True
+        ):
+            return default
+    if float(profile["roughness_min"]) <= candidate <= float(profile["roughness_max"]):
+        return candidate
+    glass = float(profile["glass_roughness"])
+    if is_glass and math.isclose(candidate, glass, rel_tol=0.0, abs_tol=1e-6):
+        return glass
+    return default
+
+
+def _resolved_material_record(material, profile: dict, roughness: float, source: str) -> dict:
+    return {
+        "name": material.name,
+        "source": source,
+        "base_color": [float(value) for value in profile["base_color"]],
+        "roughness": float(roughness),
+        "metallic": 0.0,
+    }
+
+
+def _configure_neutral_material(material, profile: dict, roughness: float):
+    base_color = tuple(float(value) for value in profile["base_color"])
+    material.diffuse_color = base_color
     material.use_nodes = True
-    principled = material.node_tree.nodes.get("Principled BSDF")
-    principled.inputs["Base Color"].default_value = (0.42, 0.42, 0.42, 1.0)
-    principled.inputs["Roughness"].default_value = 0.6
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    principled = nodes.new("ShaderNodeBsdfPrincipled")
+    material.node_tree.links.new(principled.outputs["BSDF"], output.inputs["Surface"])
+    principled.inputs["Base Color"].default_value = base_color
+    principled.inputs["Roughness"].default_value = roughness
     principled.inputs["Metallic"].default_value = 0.0
+
+
+def _neutral_material(profile: dict, roughness: float):
+    material = bpy.data.materials.new(f"MB_NEUTRAL_GRAY_R{roughness:.3f}")
+    _configure_neutral_material(material, profile, roughness)
+    return material
+
+
+def _neutralize(collection, profile: dict):
     submitted_lights = [obj for obj in _collection_objects(collection) if obj.type == "LIGHT"]
     for obj in submitted_lights:
         bpy.data.objects.remove(obj, do_unlink=True)
+    resolved_materials = []
+    for material in list(bpy.data.materials):
+        roughness = _source_roughness(material, profile)
+        _configure_neutral_material(material, profile, roughness)
+        resolved_materials.append(_resolved_material_record(material, profile, roughness, "submitted_material"))
+    default_material = _neutral_material(profile, float(profile["roughness_default"]))
+    resolved_materials.append(_resolved_material_record(
+        default_material, profile, float(profile["roughness_default"]), "unassigned_surface_default"
+    ))
+    processed_data = set()
     for obj in _collection_objects(collection):
         obj.hide_render = False
         obj.hide_viewport = False
@@ -237,21 +314,31 @@ def _neutralize(collection):
         for property_name in ("is_holdout", "is_shadow_catcher"):
             if hasattr(obj, property_name):
                 setattr(obj, property_name, False)
-        if hasattr(obj.data, "materials"):
-            obj.data.materials.clear()
-            obj.data.materials.append(material)
+        data = getattr(obj, "data", None)
+        materials = getattr(data, "materials", None)
+        data_pointer = data.as_pointer() if data is not None else None
+        if materials is not None and data_pointer not in processed_data:
+            processed_data.add(data_pointer)
+            if not materials:
+                materials.append(default_material)
+            else:
+                for index, material in enumerate(materials):
+                    if material is None:
+                        materials[index] = default_material
     pending = [collection]
     while pending:
         current = pending.pop()
         current.hide_render = False
         current.hide_viewport = False
         pending.extend(current.children)
-    bpy.context.view_layer.material_override = material
     world = bpy.data.worlds.new("MB_NEUTRAL_WORLD")
     world.use_nodes = True
-    world.node_tree.nodes["Background"].inputs["Color"].default_value = (0.055, 0.055, 0.055, 1.0)
-    world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.35
+    world.node_tree.nodes["Background"].inputs["Color"].default_value = tuple(
+        float(value) for value in profile["background_color"]
+    )
+    world.node_tree.nodes["Background"].inputs["Strength"].default_value = float(profile["background_strength"])
     bpy.context.scene.world = world
+    return sorted(resolved_materials, key=lambda record: record["name"])
 
 
 def _look_at(obj, target: Vector, image_up: Vector) -> None:
@@ -376,7 +463,34 @@ def _render(scene, camera, center: Vector, distance: float, output: Path, seed: 
     _remove(lights)
     if not output.is_file() or output.stat().st_size == 0:
         raise RuntimeError(f"Render was not written: {output}")
-    return {"path": str(output), "sha256": _hash(output), "size": output.stat().st_size, "seconds": elapsed, "seed": seed}
+    image = bpy.data.images.load(str(output), check_existing=False)
+    width, height = image.size
+    pixels = list(image.pixels)
+    rgb = [pixels[i:i+3] for i in range(0, len(pixels), max(4, (len(pixels)//4096//4)*4))]
+    spread = max((max(c) for c in rgb), default=0) - min((min(c) for c in rgb), default=0)
+    warnings = []
+    background = rgb[0] if rgb else [0, 0, 0]
+    visible_coverage = sum(max(abs(c[i]-background[i]) for i in range(3)) > 0.03 for c in rgb) / max(len(rgb), 1)
+    if visible_coverage < 0.01:
+        warnings.append('Suspicious visible-content coverage below one percent')
+    from bpy_extras.object_utils import world_to_camera_view
+    projected = []
+    for obj in bpy.data.collections['MODEL'].all_objects:
+        if obj.type == 'MESH':
+            projected.extend(world_to_camera_view(scene, camera, obj.matrix_world @ Vector(corner)) for corner in obj.bound_box)
+    outside = sum(p.z <= 0 or p.x < 0 or p.x > 1 or p.y < 0 or p.y > 1 for p in projected)
+    if outside:
+        warnings.append('Potential clipped geometry; inspect projected model bounds')
+    if spread < 0.025:
+        warnings.append('Suspicious blank or low-content view; verifier inspection required')
+    expected = int(scene.render.resolution_x * scene.render.resolution_percentage / 100)
+    if width != expected or height != expected:
+        raise RuntimeError('Decoded image resolution mismatch')
+    bpy.data.images.remove(image)
+    return {"path": str(output), "sha256": _hash(output), "size": output.stat().st_size, "seconds": elapsed, "seed": seed,
+            'frame': scene.frame_current, 'camera': camera.name.removeprefix('MB_'),
+            'camera_matrix': [list(row) for row in camera.matrix_world], 'ortho_scale': camera.data.ortho_scale,
+            'resolution': [width, height], 'decoded': True, 'visible_content_coverage': visible_coverage, 'projected_bounds_outside': outside, 'warnings': warnings}
 
 
 def main(config: dict) -> dict:
@@ -388,23 +502,82 @@ def main(config: dict) -> dict:
     _inspect_source(source)
     collection = _append_model(source)
     bpy.context.scene.frame_set(int(task["frame"].get("evaluation_frame", 1)))
-    inventory, geometry_min, geometry_max = _geometry_inventory(collection, task)
+    try:
+        inventory, geometry_min, geometry_max = _geometry_inventory(collection, task)
+    except RuntimeError as exc:
+        if config['mode'] == 'final':
+            raise
+        inventory = {'inspection_error': str(exc)}
     gpu, scene = _strict_configuration(profile)
     scene.unit_settings.scale_length = float(task["frame"]["unit_scale"])
-    _neutralize(collection)
+    resolved_materials = _neutralize(collection, profile)
     render_records = []
     for index, view in enumerate(config["views"]):
         if view not in {"front", "back", "left", "right", "top", "bottom", "azimuth_000", "azimuth_045", "azimuth_090", "azimuth_135", "azimuth_180", "azimuth_225", "azimuth_270", "azimuth_315"}:
             raise RuntimeError(f"Unknown standardized view: {view}")
         camera, center, distance = _evaluation_camera(view, task)
         group = "orthographic" if view in {"front", "back", "left", "right", "top", "bottom"} else "turntable"
-        render_records.append(_render(scene, camera, center, distance, output / group / f"{view}.png", 1701 + index * 104729))
+        render_records.append(_render(scene, camera, center, distance, output / group / f"{view}.png", int(hashlib.sha256(view.encode()).hexdigest()[:7], 16)))
         _remove([camera])
     diagnostics = []
     for index, record in enumerate(config.get("diagnostic_cameras", [])):
-        camera, center, distance = _diagnostic_camera(record)
-        diagnostics.append(_render(scene, camera, center, distance, output / "diagnostic" / f"{record['name']}.png", 900001 + index))
+        original_frame = scene.frame_current
+        scene.frame_set(int(record.get('frame', original_frame)))
+        objects = _collection_objects(collection)
+        original_visibility = {obj: obj.hide_render for obj in objects}
+        temporary_modifiers = []
+        section_tool = None
+        try:
+            isolated = record.get('isolate', [])
+            if isolated:
+                if not isinstance(isolated, list) or set(isolated) - {obj.name for obj in objects}:
+                    raise RuntimeError('Isolation references missing MODEL geometry')
+                for obj in objects:
+                    obj.hide_render = obj.name not in isolated
+            section = record.get('section_box')
+            if section:
+                lower, upper = Vector(section['min']), Vector(section['max'])
+                if not _finite((*lower, *upper)) or any(lower[i] >= upper[i] for i in range(3)):
+                    raise RuntimeError('Section box must have finite increasing bounds')
+                bpy.ops.mesh.primitive_cube_add(size=1, location=(lower+upper)*0.5)
+                section_tool = bpy.context.object
+                section_tool.name = 'MB_TEMPORARY_INSPECTION_SECTION'
+                section_tool.scale = upper-lower
+                section_tool.hide_render = True
+                for obj in objects:
+                    if obj.type == 'MESH' and not obj.hide_render:
+                        modifier = obj.modifiers.new('MB_INSPECTION_ONLY_SECTION', 'BOOLEAN')
+                        modifier.operation = 'INTERSECT'
+                        modifier.solver = 'EXACT'
+                        modifier.object = section_tool
+                        temporary_modifiers.append((obj, modifier))
+            camera, center, distance = _diagnostic_camera(record)
+            rendered = _render(scene, camera, center, distance, output / "diagnostic" / f"{record['name']}.png", int(hashlib.sha256(record['name'].encode()).hexdigest()[:7], 16))
+            rendered['inspection'] = {'isolated_geometry': isolated, 'section_box': section, 'temporary_scene_only': True}
+            diagnostics.append(rendered)
+            _remove([camera])
+        finally:
+            for obj, modifier in temporary_modifiers:
+                obj.modifiers.remove(modifier)
+            if section_tool is not None:
+                _remove([section_tool])
+            for obj, visibility in original_visibility.items():
+                obj.hide_render = visibility
+            scene.frame_set(original_frame)
+    motion = []
+    for frame_number in config.get('motion_frames', []):
+        scene.frame_set(int(frame_number))
+        camera, center, distance = _evaluation_camera('front', task)
+        record = _render(scene, camera, center, distance, output / 'motion' / f'front_{frame_number:04d}.png', int(hashlib.sha256(b'front').hexdigest()[:7], 16))
+        motion.append(record)
         _remove([camera])
+    seen_images = {}
+    for record in render_records + diagnostics + motion:
+        if record['sha256'] in seen_images:
+            record['warnings'].append('Duplicate image content; verify whether symmetry or motion explains it')
+        seen_images[record['sha256']] = record['path']
+        record['artifact_sha256'] = source_sha256
+        record['settings'] = profile
     if _hash(source) != source_sha256:
         raise RuntimeError("Owned source artifact changed during Blender evaluation")
     return {
@@ -413,10 +586,12 @@ def main(config: dict) -> dict:
         "completed_at": time.time(),
         "blender": {"version": bpy.app.version_string, "build_hash": bpy.app.build_hash.decode(errors="replace") if isinstance(bpy.app.build_hash, bytes) else str(bpy.app.build_hash)},
         "device": {"name": gpu.name, "type": gpu.type, "driver": None},
-        "render": {"engine": scene.render.engine, "samples": scene.cycles.samples, "denoiser": profile["denoiser"], "view_transform": scene.view_settings.view_transform, "ocio_configuration": getattr(bpy.context.preferences.system, "ocio_config_override", "") or None},
+        "render": {"engine": scene.render.engine, "samples": scene.cycles.samples, "denoiser": profile["denoiser"], "view_transform": scene.view_settings.view_transform, "ocio_configuration": getattr(bpy.context.preferences.system, "ocio_config_override", "") or None, "background_color": profile["background_color"], "background_strength": profile["background_strength"]},
+        "resolved_materials": resolved_materials,
         "inventory": inventory,
         "renders": render_records,
         "diagnostic_renders": diagnostics,
+        "motion_renders": motion,
     }
 
 

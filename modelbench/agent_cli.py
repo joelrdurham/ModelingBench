@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     measure.add_argument("--provenance", required=True, choices=["authoritative", "derived", "visual_estimate"])
     measure.add_argument("--evidence", nargs="+", required=True)
     measure.add_argument("--notes")
+    response = sub.add_parser('respond', help='Record a task-specific builder response; does not resolve the task')
+    response.add_argument('--task', required=True)
+    response.add_argument('--message', required=True)
+    check = sub.add_parser('self-check', help='Run the independent geometry evaluator on a workspace artifact')
+    check.add_argument('--source', required=True)
     return parser
 
 
@@ -95,7 +100,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         root, run_dir, workspace = _context()
-        if args.command == "checkpoint":
+        if args.command == 'respond':
+            from .review import respond
+            result = respond(run_dir, args.task, args.message)
+        elif args.command == 'self-check':
+            from .measurements import evaluate
+            from .util import sha256_file
+            source = resolve_within(workspace, args.source)
+            result = evaluate(root, run_dir, source, workspace / 'self-check' / sha256_file(source), owned=False)
+        elif args.command == "checkpoint":
             diagnostics = _json_file_in_workspace(workspace, args.diagnostic_cameras, "Diagnostic cameras") or []
             observations = _json_file_in_workspace(workspace, args.observations, "Observations") or {}
             if not isinstance(diagnostics, list) or not isinstance(observations, dict):

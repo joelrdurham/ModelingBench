@@ -2,18 +2,30 @@ version = 1
 adapter = "command"
 command = [
   "C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", "codex", "exec",
-  "--sandbox", "workspace-write",
+  "--approve-for-me",
   "--ephemeral",
+  "--ignore-user-config",
+  "--skip-git-repo-check",
   "--json",
   "--output-schema", "{result_schema}",
   "--output-last-message", "{result_file}",
+  "--model", "{model}",
+  "--config", "model_reasoning_effort={effort}",
   "-C", "{workspace}",
   "-"
 ]
 
+[models.builder]
+model = "gpt-6-astra"
+effort = "high"
+allowed_models = { "gpt-6-astra" = ["low", "medium", "high", "xhigh", "max", "ultra"] }
+
+[models.verifier]
+model = "gpt-6-astra"
+effort = "high"
+allowed_models = { "gpt-6-astra" = ["low", "medium", "high", "xhigh", "max", "ultra"] }
+
 [limits]
-max_turns = 8
-max_checkpoints = 32
 wall_clock_seconds = 14400
 research_bytes = 1000000000
 blender_seconds = 3600

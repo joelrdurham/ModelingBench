@@ -18,3 +18,14 @@ ground_plane = true
 name = "object_center"
 position = [0.0, 0.0, 1.25]
 tolerance = 0.05
+
+[verification]
+frames = [1]
+
+[verification.materials]
+enabled = true
+base_color_linear_rgb = [0.18, 0.18, 0.18]
+base_color_tolerance = 0.001
+default_roughness = 0.36
+roughness_tolerance = 0.01
+roughness_ranges = { default = [0.2, 0.8], rubber = [0.2, 0.8], glass = [0.1, 0.8] }

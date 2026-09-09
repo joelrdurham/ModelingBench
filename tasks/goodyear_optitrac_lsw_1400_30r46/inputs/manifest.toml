@@ -1,0 +1,26 @@
+version = 1
+
+[[inputs]]
+id = "manufacturer_catalog_snapshot"
+role = "dimension_document"
+use = "constraint"
+path = "manufacturer_catalog_snapshot.txt"
+media_type = "text/plain"
+title = "Titan Optitrac G0PMS6 catalog snapshot"
+source_url = "https://www.titan-intl.com/Tires/OPTITRAC?product=G0PMS6"
+view_classification = "unknown"
+known_dimension = { name = "overall_diameter", value = 2.107692, unit = "m" }
+notes = "Manufacturer catalog values transcribed on 2026-09-09; exact inch-to-meter conversions are included in the snapshot."
+confidence = 1.0
+
+[[inputs]]
+id = "manufacturer_optitrac_product_line_image"
+role = "reference_image"
+use = "reference"
+path = "manufacturer_optitrac_product_line.jpg"
+media_type = "image/jpeg"
+title = "Manufacturer Optitrac product-line image"
+source_url = "https://hub.titan-intl.com/sfc/servlet.shepherd/version/download/0681J000007skqdQAA"
+view_classification = "perspective"
+notes = "Official product-line image embedded on the Titan OPTITRAC page. It is qualitative visual evidence only and is not asserted to be an orthographic image of catalog number G0PMS6."
+confidence = 0.65

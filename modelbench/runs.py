@@ -120,6 +120,11 @@ def create_run(
             destination = run_dir / "workspace" / "seeds" / task_input.id / task_input.path.name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(task_input.path, destination)
+    measurement_driver = root / 'modelbench' / 'measure_driver.py'
+    if measurement_driver.is_file():
+        shutil.copy2(measurement_driver, run_dir / 'snapshot' / 'measure_driver.py')
+        metadata['measurement_driver'] = {'sha256': sha256_file(measurement_driver)}
+        atomic_write_json(run_dir / 'run.json', metadata)
     return run_dir
 
 
@@ -156,6 +161,8 @@ def verify_run_snapshot(run_dir: Path) -> None:
             metadata.get("blender_driver", {}).get("sha256"),
         ),
     }
+    if metadata.get('measurement_driver'):
+        checks['measurement evaluator'] = (snapshot / 'measure_driver.py', metadata['measurement_driver']['sha256'])
     for label, (path, expected) in checks.items():
         if not path.is_file() or is_link(path) or not isinstance(expected, str) or sha256_file(path) != expected:
             raise StateError(f"{label.capitalize()} snapshot integrity check failed")
@@ -168,16 +175,39 @@ def next_artifact_path(run_dir: Path) -> Path:
     historical = current.get("artifact", {}).get("historical_path", "")
     match = re.search(r"model_v(\d{6})\.blend$", historical)
     version = int(match.group(1)) + 1 if match else 1
+    existing = [int(p.stem.split('v')[-1]) for p in (run_dir / 'artifacts').glob('model_v*.blend')]
+    version = max(version, max(existing, default=0) + 1)
     return run_dir / "artifacts" / f"model_v{version:06d}.blend"
 
 
-def promote(
+def promote(generated, run_dir, artifact, *, expected_artifact_sha256, budget_deadline: float | None = None):
+    from .review import lock
+    from .budgets import require_remaining
+    if budget_deadline is not None: require_remaining(budget_deadline)
+    with lock(run_dir):
+        return _promote_locked(generated, run_dir, artifact, expected_artifact_sha256=expected_artifact_sha256, budget_deadline=budget_deadline)
+
+
+def _promote_locked(
     generated: Path,
     run_dir: Path,
     artifact: Path,
     *,
     expected_artifact_sha256: str,
+    budget_deadline: float | None = None,
 ) -> dict[str, Any]:
+    from .review import assert_publishable
+    from .budgets import require_remaining
+    assert_publishable(run_dir, expected_artifact_sha256)
+    from .review import current as current_revision
+    from .automation import validate_render_set, _canonical_render_result
+    revision = current_revision(run_dir)
+    registered_final = run_dir / 'revisions' / revision['id'] / 'final'
+    expected_renders = validate_render_set(run_dir, registered_final, read_json(registered_final / 'blender_result.json'), 'final', expected_artifact_sha256)
+    mirror = run_dir / 'renders/final'
+    mirror_result = _canonical_render_result(run_dir, mirror, read_json(mirror / 'blender_result.json'), 'final')
+    if validate_render_set(run_dir, mirror, mirror_result, 'final', expected_artifact_sha256) != expected_renders:
+        raise StateError('Publication renders differ from registered final evidence')
     task_id = load_state(run_dir)["task_id"]
     task_root = generated / task_id
     current = task_root / "current"
@@ -194,11 +224,13 @@ def promote(
         published_model = current / "model.blend"
         if not published_model.is_file() or sha256_file(published_model) != expected_artifact_sha256:
             raise StateError("Existing publication model does not match its evaluation")
-        atomic_write_json(task_root / "current.json", existing)
-        for stale in task_root.glob(".current-old-*"):
-            if stale.is_dir() and not stale.is_symlink():
-                shutil.rmtree(stale)
-        return existing
+        intact_renders = all((current / 'renders' / relative).is_file() and sha256_file(current / 'renders' / relative) == digest for relative, digest in expected_renders.items())
+        if intact_renders:
+            atomic_write_json(task_root / "current.json", existing)
+            for stale in task_root.glob(".current-old-*"):
+                if stale.is_dir() and not stale.is_symlink():
+                    shutil.rmtree(stale)
+            return existing
 
     nonce = uuid.uuid4().hex
     staging = task_root / f".current-{run_dir.name}-{nonce}"
@@ -218,6 +250,8 @@ def promote(
             staging / "renders",
             exclude={"invocation.json", "blender_result.json"},
         )
+        from .review import package
+        package(run_dir, staging / 'review')
         publication = {
             "version": 1,
             "task_id": task_id,
@@ -231,9 +265,13 @@ def promote(
             "promoted_at": utc_now(),
         }
         atomic_write_json(staging / "publication.json", publication)
+        atomic_write_json(staging / 'review/publication.json', publication)
+        atomic_write_json(staging / 'review/manifest.json', {'version': 1, 'artifact_sha256': expected_artifact_sha256, 'files': file_inventory(staging / 'review', exclude={'manifest.json'})})
+        if budget_deadline is not None: require_remaining(budget_deadline)
         if current.exists():
             os.replace(current, old)
         try:
+            if budget_deadline is not None: require_remaining(budget_deadline)
             os.replace(staging, current)
             atomic_write_json(task_root / "current.json", publication)
         except BaseException:
@@ -270,5 +308,7 @@ def status_records(generated: Path, identifier: str | None = None) -> list[dict[
             "updated_at": state.get("updated_at"),
             "artifact": state.get("artifact"),
             "failure": state.get("failure"),
+            "models": __import__('modelbench.models', fromlist=['settings']).settings(path),
+            "review": read_json(path / 'review.json', {'provenance': 'Not recorded'}),
         })
     return records

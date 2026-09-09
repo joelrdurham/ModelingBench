@@ -1,0 +1,114 @@
+{
+  "type": "object",
+  "properties": {
+    "artifact_sha256": {
+      "type": "string"
+    },
+    "acceptance_sha256": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "repair"
+      ]
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["ACCEPT", "REFINE", "NEW_CONCEPT", "BEST_AVAILABLE"]
+    },
+    "assessment": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "requirement": {
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "requirement",
+          "instruction",
+          "severity",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "scores": {
+      "type": "object",
+      "properties": {
+        "accuracy": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "precision": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "assembly": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "physical_viability": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "aesthetic": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "evidence": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
+      "required": ["accuracy", "precision", "assembly", "physical_viability", "aesthetic", "evidence"],
+      "additionalProperties": false
+    },
+    "resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "task_id",
+          "resolved",
+          "reason",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "artifact_sha256",
+    "acceptance_sha256",
+    "verdict",
+    "decision",
+    "assessment",
+    "findings",
+    "resolutions",
+    "scores"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

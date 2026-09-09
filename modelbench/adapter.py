@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from .config import AgentProfile, expand_command
+from .budgets import BudgetExhausted, require_remaining
 from .errors import ValidationError
 from .feedback import pending_feedback
 from .runs import verify_run_snapshot
@@ -49,6 +50,8 @@ class AgentResult:
     reported_iterations: int | None
     feedback_requested: bool
     notes: str
+    # Harness-owned provenance; never accepted from agent-authored result JSON.
+    invocation: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, path: Path) -> "AgentResult":
@@ -105,6 +108,29 @@ def build_agent_prompt(run_dir: Path) -> str:
         if isinstance(metadata, dict)
         else None
     )
+    render_profile = (
+        metadata.get("render_profiles", {}).get("final", {}).get("data", {})
+        if isinstance(metadata, dict)
+        else {}
+    )
+    base_color = render_profile.get("base_color", [0.18, 0.18, 0.18, 1.0])
+    roughness_default = render_profile.get("roughness_default", 0.36)
+    roughness_min = render_profile.get("roughness_min", 0.2)
+    roughness_max = render_profile.get("roughness_max", 0.8)
+    glass_roughness = render_profile.get("glass_roughness", 0.1)
+    material_instruction = (
+        "# Benchmark render material\n"
+        f"Use neutral gray Base Color RGB ({base_color[0]:g}, {base_color[1]:g}, {base_color[2]:g}) "
+        f"for all rendered surfaces. Use Roughness {roughness_default:g} by default and keep most surfaces "
+        f"at that value. Roughness may vary from {roughness_min:g} to {roughness_max:g} only when needed "
+        f"to communicate material identity; rubber may sit near the upper end. Glass may use Roughness "
+        f"{glass_roughness:g}. For an intentional Roughness 0.5, set the material custom property "
+        "modelbench_roughness_override to true so it is distinguishable from Blender's untouched default. "
+        "Do not vary Base Color to distinguish materials. Set these values in the saved model active surface shader; "
+        "review-render overrides are not evidence of source-material compliance. Follow any stricter task material policy.\n\n"
+    )
+    review_state = read_json(run_dir / 'review.json', {})
+    acceptance = read_json(run_dir / 'acceptance.json', {})
     context = {
         "run_id": state["run_id"],
         "task_id": state["task_id"],
@@ -118,13 +144,20 @@ def build_agent_prompt(run_dir: Path) -> str:
         "blender_executable": blender_executable,
         "checkpoint_command": f'"{os.sys.executable}" -m modelbench.agent_cli checkpoint --source <workspace .blend> --phase <label>',
         "evidence_command": f'"{os.sys.executable}" -m modelbench.agent_cli evidence --file <workspace file> [metadata]',
+        "design_manifest": acceptance.get('design_manifest'),
+        "design_exploration": review_state.get('exploration'),
     }
     return (
         "You are the modeling agent for a ModelingBench run. Work only inside the supplied workspace. "
         "Preserve +Z up, -Y front, task bounds, anchors, and the required MODEL collection. "
         "Use agent-facing commands for auditable evidence and checkpoints. Write exactly one structured result to the result path.\n\n"
+        f"{material_instruction}"
         f"# Run context\n```json\n{json.dumps(context, indent=2)}\n```\n\n"
-        f"# Task\n{prompt}\n" + "".join(instructions)
+        f"# Task\n{prompt}\n" + "".join(instructions) +
+        ('\n\n# Assembly-aware exploration\nThe manifest is a functional obligation, not a prescribed shape. Carry every stable requirement ID into plans, evidence, and revisions. '
+         'When exploration is enabled, make the requested concept structurally distinct from prior concepts during divergence; refine only the selected concept during refinement. '
+         'Object names and assertions are traceability aids, never proof. Inspect actual solids, transforms, axes, fits, engagement, retention, patterns, sections, and swept volumes. '
+         'Record unavailable measurements as unknown. Target explicit failed/weak records and retain before/after evidence.')
     )
 
 
@@ -175,12 +208,43 @@ def _agent_environment(
     return env
 
 
-def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult:
+def terminate_process_tree(process):
+    if process.poll() is not None:
+        return
+    if os.name == 'nt':
+        subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True,
+                       creationflags=subprocess.CREATE_NO_WINDOW, timeout=30, check=False)
+    else:
+        import signal
+        os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def cli_version(profile):
+    try:
+        index = profile.command.index('exec')
+        result = subprocess.run(profile.command[:index] + ['--version'], capture_output=True, text=True, timeout=10)
+        return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else 'Not recorded'
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return 'Not recorded'
+
+
+def run_adapter(root: Path, run_dir: Path, profile: AgentProfile, *, budget_deadline: float | None = None) -> AgentResult:
     verify_run_snapshot(run_dir)
+    if budget_deadline is not None:
+        require_remaining(budget_deadline)
     state = load_state(run_dir)
     turn = int(state.get("observed_turns", 0)) + 1
-    if turn > profile.limit("max_turns", 8):
+    if "max_turns" in profile.data.get("limits", {}) and turn > profile.limit("max_turns", 8):
         raise ValidationError(f"Agent turn limit exceeded ({profile.limit('max_turns', 8)})")
+    from .models import begin_invocation, finish_invocation
+    frozen = begin_invocation(run_dir, 'builder', cli_version=cli_version(profile)) if (run_dir / 'model-settings.json').exists() else None
+    state['observed_turns'] = turn
+    save_state(run_dir, state)
     result_path = run_dir / "workspace" / "agent_result.json"
     result_path.unlink(missing_ok=True)
     schema = run_dir / "snapshot" / "schemas" / "agent_result.schema.json"
@@ -197,8 +261,23 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
         "result_file": str(result_path),
         "run_dir": str(run_dir),
     }
+    if frozen:
+        values.update(model=frozen['requested_model'], effort=frozen['requested_effort'])
     command = expand_command(profile.command, values)
     prompt = build_agent_prompt(run_dir)
+    if (run_dir / 'review.json').exists():
+        from .review import load
+        review_state = load(run_dir)
+        tasks = [t for t in review_state['tasks'] if t['status'] != 'verifier_resolved']
+        prompt += '\n# Corrections and independent evidence\n' + json.dumps({'tasks': tasks, 'revisions': [{k:r[k] for k in ('id','parent','artifact','sha256')} for r in review_state['revisions']], 'evidence_directory': str(run_dir / 'revisions'), 'seed': str(run_dir / 'workspace/seed.blend')}, indent=2)
+        prompt += ('\nFor EVERY correction, use modelbench-agent respond --task <id> --message <specific change and evidence>. '
+                   'Responding never resolves a task. Use modelbench-agent self-check --source <workspace .blend> for the independent checks. '
+                   'Preserve matching diagnostic views. Correct the whole asset and submit; no human approval is required. '
+                   'After checkpoint creation, continue to a submitted result unless a pause was requested. '
+                   'The independent harness verifier starts only AFTER you return status submitted. '
+                   'Do not wait for a harness verifier result before submission. Use your own visual inspection and self-checks; '
+                   'do not launch a separate verifier or wait for private verifier sign-off. The orchestrator owns that role and its configured model/provenance. '
+                   'Your self-check is advisory; publication remains gated by the orchestrator.')
     token = secrets.token_urlsafe(32)
     capability_path = run_dir / ".agent-api.json"
     atomic_write_json(capability_path, {
@@ -209,9 +288,11 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
         "created_at": utc_now(),
     })
     env = _agent_environment(root, run_dir, result_path, schema, profile, token)
-    invocation = {"turn": turn, "command": command, "cwd": str(run_dir / "workspace"), "started_at": utc_now()}
+    invocation = {"role": "builder", "settings": frozen or "Not recorded", "turn": turn, "command": command, "cwd": str(run_dir / "workspace"), "started_at": utc_now()}
     atomic_write_json(run_dir / "logs" / f"agent_turn_{turn:04d}.invocation.json", invocation)
     try:
+        if budget_deadline is not None:
+            require_remaining(budget_deadline)
         process = subprocess.Popen(
             command,
             cwd=run_dir / "workspace",
@@ -223,10 +304,13 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
             encoding="utf-8",
             errors="replace",
             shell=False,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0,
+            start_new_session=os.name != "nt",
         )
     except BaseException:
         capability_path.unlink(missing_ok=True)
+        if frozen:
+            finish_invocation(run_dir, 'builder', frozen['id'], status='failed', error='Process creation failed')
         raise
     assert process.stdin and process.stdout and process.stderr
     events = run_dir / "logs" / "agent_events.jsonl"
@@ -247,16 +331,25 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
     input_thread = threading.Thread(target=feed_prompt)
     input_thread.start()
     try:
-        code = process.wait(timeout=profile.limit("wall_clock_seconds", 14400))
-    except (subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
-        if os.name == "nt":
-            process.send_signal(signal.CTRL_BREAK_EVENT)
-        else:
-            process.terminate()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
+        import time
+        deadline = time.monotonic() + profile.limit('wall_clock_seconds', 14400)
+        if budget_deadline is not None:
+            deadline = min(deadline, budget_deadline)
+        while True:
+            if read_json(run_dir / 'control.json', {}).get('cancel_requested'):
+                raise KeyboardInterrupt('Run cancelled')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if budget_deadline is not None and deadline == budget_deadline:
+                    raise BudgetExhausted('User budget exhausted')
+                raise subprocess.TimeoutExpired(command, profile.limit('wall_clock_seconds', 14400))
+            try:
+                code = process.wait(timeout=min(1.0, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+    except (subprocess.TimeoutExpired, KeyboardInterrupt, BudgetExhausted) as exc:
+        terminate_process_tree(process)
         raise
     finally:
         input_thread.join(timeout=10)
@@ -265,6 +358,15 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
         process.stdout.close()
         process.stderr.close()
         capability_path.unlink(missing_ok=True)
+        if frozen:
+            usage = None
+            from .util import read_jsonl
+            for record in read_jsonl(events):
+                payload = record.get('event', {})
+                if 'usage' in payload:
+                    usage = payload['usage']
+            finish_invocation(run_dir, 'builder', frozen['id'], usage=usage,
+                              status='finished' if process.returncode == 0 else 'failed')
     state = load_state(run_dir)
     state["observed_turns"] = turn
     save_state(run_dir, state)
@@ -272,4 +374,4 @@ def run_adapter(root: Path, run_dir: Path, profile: AgentProfile) -> AgentResult
         raise ValidationError(f"Agent command exited with code {code}; see run logs")
     result = AgentResult.load(result_path)
     append_jsonl(events, {"at": utc_now(), "stream": "harness", "event": {"type": "agent_result", **result.__dict__}})
-    return result
+    return AgentResult(result.status, result.blend_path, result.phase, result.reported_iterations, result.feedback_requested, result.notes, frozen)

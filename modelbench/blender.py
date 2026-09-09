@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import BlenderError, ValidationError
+from .budgets import BudgetExhausted, bounded_timeout, deadline_expired
 from .util import atomic_write_json, file_inventory, read_json, utc_now
 
 STANDARD_VIEWS = [
@@ -62,6 +63,8 @@ def run_blender(
     timeout: int,
     views: list[str] | None = None,
     diagnostic_cameras: list[dict[str, Any]] | None = None,
+    motion_frames: list[int] | None = None,
+    budget_deadline: float | None = None,
 ) -> dict[str, Any]:
     if mode not in {"checkpoint", "final"}:
         raise ValidationError(f"Invalid Blender mode: {mode}")
@@ -78,6 +81,7 @@ def run_blender(
         "render_profile": render_profile,
         "views": views or STANDARD_VIEWS,
         "diagnostic_cameras": diagnostic_cameras or [],
+        "motion_frames": motion_frames or [],
         "started_at": utc_now(),
     }
     atomic_write_json(invocation, config)
@@ -101,12 +105,14 @@ def run_blender(
             env=_blender_environment(),
             text=True,
             capture_output=True,
-            timeout=timeout,
+            timeout=bounded_timeout(timeout, budget_deadline),
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        log_prefix.with_suffix(".stdout.log").write_text(exc.stdout or "", encoding="utf-8")
-        log_prefix.with_suffix(".stderr.log").write_text(exc.stderr or "", encoding="utf-8")
+        log_prefix.with_suffix(".stdout.log").write_text(exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or ""), encoding="utf-8")
+        log_prefix.with_suffix(".stderr.log").write_text(exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or ""), encoding="utf-8")
+        if deadline_expired(budget_deadline):
+            raise BudgetExhausted('User budget exhausted') from exc
         raise BlenderError(f"Blender {mode} timed out after {timeout} seconds") from exc
     log_prefix.with_suffix(".stdout.log").write_text(process.stdout, encoding="utf-8")
     log_prefix.with_suffix(".stderr.log").write_text(process.stderr, encoding="utf-8")

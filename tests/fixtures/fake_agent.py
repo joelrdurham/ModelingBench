@@ -20,3 +20,9 @@ result = {
 result_file.write_text(json.dumps(result), encoding="utf-8")
 print(json.dumps({"type": "fake_agent", "status": status}))
 
+
+if status == 'checkpoint':
+    control_path = Path(os.environ['MODELBENCH_RUN_DIR']) / 'control.json'
+    control = json.loads(control_path.read_text())
+    control['pause_requested'] = True
+    control_path.write_text(json.dumps(control), encoding='utf-8')
