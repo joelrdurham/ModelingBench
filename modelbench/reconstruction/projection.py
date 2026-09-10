@@ -27,6 +27,7 @@ def project(camera, points):
 def description(camera, image):
     width, height = crop_size(image)
     return {**camera, "image_id": image["id"], "image_size": [width, height],
+            "translation_z_observable": camera["model"] != "orthographic",
             "pixel_convention": "continuous pixel edges; center of first pixel is (0.5, 0.5)",
             "camera_frame": {"handedness": "right", "axes": "+X right, +Y down, +Z forward"},
             "projection": "u=cx+fx*Xc/Zc, v=cy+fy*Yc/Zc" if camera["model"] == "perspective" else "u=cx+sx*Xc, v=cy+sy*Yc",

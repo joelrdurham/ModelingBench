@@ -22,9 +22,21 @@ def selected_solution(reference, result):
             raise ValidationError("Selected reconstruction hypothesis does not exist: " + str(selected))
         if not hypothesis.get("valid") or hypothesis.get("mathematical_status") != "solved":
             raise ValidationError("Selected reconstruction hypothesis does not support a fixed identifiable camera")
-        return {**result, "camera": hypothesis["camera"], "selected_hypothesis": selected,
-                "status": "solved", "measurements": hypothesis["measurements"],
-                "rectifications": hypothesis.get("rectifications", [])}
+        # Switch the complete assessment, not just the camera. The immutable
+        # execution receipt still describes the original multihypothesis solve.
+        chosen = copy.deepcopy(result)
+        for key in ("camera", "landmarks", "measurements", "mathematical_status", "convergence_status",
+                    "constraints", "numerical_gauges", "landmark_depths", "rectifications", "projections", "depth"):
+            chosen[key] = copy.deepcopy(hypothesis.get(key))
+        chosen.update(selected_hypothesis=selected, status="solved", reason=None,
+                      unresolved_degrees_of_freedom=copy.deepcopy(hypothesis["identifiability"]),
+                      conflicts=[c for c in chosen["constraints"] if c["status"] != "satisfied"],
+                      rectification=chosen["rectifications"][0] if chosen["rectifications"] else None,
+                      diagnostic_artifacts=[],
+                      hypothesis_selection={"id": selected, "explicit": True,
+                                            "original_execution_hypothesis": result.get("selected_hypothesis")})
+        for rect in chosen["rectifications"]: rect["artifacts"] = {}
+        return chosen
     return result
 
 
@@ -71,6 +83,20 @@ def solve_references(run_dir, spec, directory):
         execution = execute(case, folder/"execution", inputs, preserve_environment=True)
         solution = read_json(execution/"result.json")
         selected = selected_solution(reference, solution)
+        if reference.get("hypothesis_id") and case.get("case_version") == "2.0":
+            from .reconstruction.diagnostics import write_artifacts
+            manifest = read_json(execution/"manifest.json")
+            copied_inputs = {item["id"]: execution/item["file"] for item in manifest["images"]}
+            artifacts = write_artifacts(read_json(execution/"normalized_case.json"), selected, copied_inputs, folder/"selected-diagnostics")
+            for artifact in artifacts:
+                for key in ("image", "validity_mask"):
+                    if key in artifact: artifact[key] = "selected-diagnostics/" + artifact[key]
+            selected["diagnostic_artifacts"] = artifacts
+            selected["diagnostic_root"] = "."
+            for rect in selected.get("rectifications", []):
+                rect["artifacts"] = next((a for a in artifacts if a.get("plane_id") == rect["plane_id"]), {})
+        else:
+            selected["diagnostic_root"] = "execution"
         atomic_write_json(folder/"solution.json", selected)
         records.append({"id": reference["id"], "evidence_id": reference["evidence_id"], "source_sha256": owned["sha256"],
                         "status": selected["status"], "solution": selected, "size": dimensions, "original_size": original_size,

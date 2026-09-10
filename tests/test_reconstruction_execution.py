@@ -49,6 +49,17 @@ class ExecutionAcceptanceTests(unittest.TestCase):
             (run/'manifest.json').unlink()
             with self.assertRaises(ReconstructionError): load_bundle(run)
 
+    def test_interrupted_solve_publishes_failed_receipt_before_propagating(self):
+        with tempfile.TemporaryDirectory() as temp:
+            destination=Path(temp)/'interrupted'
+            with patch('modelbench.reconstruction.storage._solver',side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):execute(scene(),destination)
+            receipt=json.loads((destination/'execution.json').read_text())
+            self.assertEqual(receipt['completion_status'],'failed')
+            result=json.loads((destination/'result.json').read_text())
+            self.assertEqual(result['mathematical_status'],'failed')
+            self.assertEqual(load_bundle(destination),scene())
+
     def test_links_and_manifest_escape_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);run=execute(scene(),root/'run')

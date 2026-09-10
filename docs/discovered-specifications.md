@@ -23,17 +23,21 @@ Canonical framing is frozen from the first independent evaluated bounds for a sp
 
 ## Modular reconstruction engine
 
-Install `python -m pip install -e ".[reference]"`. The standalone package `modelbench.reconstruction` has no Blender or run-lifecycle imports. See [engine API and replay cases](reconstruction.md) for supported projections, constraint capabilities and coordinate conventions.
+Install `python -m pip install -e ".[reconstruction]"` (`[reference]` remains an alias). The standalone package `modelbench.reconstruction` has no Blender or run-lifecycle imports. See [engine API and replay cases](reconstruction.md) for the version 2 contracts, supported projections, constraints and coordinate conventions.
 
 ```powershell
-python -m modelbench.reconstruction solve case.json --output result.json
-python -m modelbench.reconstruction replay case-bundle
-python -m modelbench.reconstruction compare old-result.json new-result.json
+modelbench-reconstruct validate case.json
+modelbench-reconstruct solve case.json --destination case-bundle --image front=reference.png
+modelbench-reconstruct replay case-bundle --destination replay-bundle
+modelbench-reconstruct compare case-bundle replay-bundle
+modelbench-reconstruct regress --suite suite.json --left-python old-env/python --right-python new-env/python --destination regression
 ```
 
-Cases and receipts include source/case hashes, engine implementation hash, dependency versions, optimization settings, identifiability, competing camera hypotheses and residual terms. Uniform scale can be derived from consistent metric segments. Known-geometry priors are verified separately. Arbitrary surface reconstruction and automatic lens distortion are not inferred by this engine. Underconstrained or unsupported cases remain explicit; agents can seek better references or propose auditable visual criteria.
+Cases and immutable executions include owned source bytes and hashes, engine version and implementation digest, installable engine artifact, exact environment pins, settings, identifiability, hypotheses and residual terms. Camera parameters and declared unknown landmarks are solved jointly. Metric anchors are active constraints; missing scale can leave ratios identifiable while absolute lengths remain unresolved. Numerical convergence and mathematical support are separate. Uncertainty intervals are conditional on supplied observations and assumptions. Arbitrary surface reconstruction, lens-distortion estimation and joint multi-view solving remain unsupported.
 
-The Blender bridge consumes the approved camera and evaluates actual model geometry. It writes neutral transparent matched views, real compositor depth EXR, surface-bound landmarks and visibility evidence. The harness compares these with audited annotations to produce point/curve errors, silhouettes, conic residuals, repeated-pattern phase, occlusion mismatches and overlays. Reconstruction residuals and model-to-reference residuals are separate records. Cameras are not silently refit to each model revision.
+The harness executes proposed cases before audit. Approval must echo the exact reconstruction evidence hash, and the compiled contract binds the receipts and selected hypothesis. Changes require an amendment and explicit candidate reevaluation; completed runs retain their history. `modelbench-agent submit-reconstruction --file case.json --evidence ev_0001` submits a capability-protected claim, not an approval.
+
+The Blender bridge consumes the fixed approved camera and evaluates actual `MODEL` geometry. It writes neutral transparent matched views, compositor depth EXR, surface-bound landmarks and visibility evidence. The harness compares these with audited annotations to produce candidate diagnostics. Reconstruction support and model-to-reference agreement are separate executable checks: a low reconstruction residual cannot establish model agreement. Missing support is unassessed, with assumption findings separate from geometry findings. Camera, artifact, binding, specification and engine identities participate in candidate cache validation. The reviewer and exported package expose both evidence categories. Matched views supplement the unchanged 14 canonical publication views.
 
 ## Research and reproducibility
 

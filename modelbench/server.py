@@ -157,6 +157,21 @@ class ReviewServer(ThreadingHTTPServer):
                            "title": entry.get("title") if isinstance(entry.get("title"), str) else "Research reference",
                            "category": "research", "notes": entry.get("notes") if isinstance(entry.get("notes"), str) else None,
                            "alias": relative})
+        from .discovery import summary as discovery_summary
+        discovery = discovery_summary(run_dir)
+        for record in (discovery or {}).get('reconstructions', []):
+            for item in record.get('files', []):
+                relative = record['path'] + '/' + item['path']
+                path = run_dir / relative
+                expected = item.get('sha256')
+                if path.suffix.lower() not in IMAGE_SUFFIXES or not path.is_file() or is_link(path) or sha256_file(path) != expected:
+                    continue
+                try: path.resolve().relative_to(run_dir.resolve())
+                except ValueError: continue
+                asset_id = self._register_asset((run_name, 'reconstruction', record['id'], relative, expected), path, expected)
+                result.append({'id': asset_id, 'url': f'/api/assets/{asset_id}', 'name': path.name,
+                               'title': record['id'] + ': ' + path.name, 'category': 'reconstruction',
+                               'alias': relative, 'notes': record['solution'].get('reason')})
         return result
 
     def store_upload(self, *, data: bytes, media_type: str) -> str:

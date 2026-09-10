@@ -147,7 +147,7 @@ def execute(case, destination, input_images=(), *, preserve_environment=True):
     finally:
         if result is None:
             # KeyboardInterrupt/SystemExit: leave a recorded interrupted execution.
-            result = {"result_version":"2.0", "status":"failed", "reason":"execution interrupted", "receipt":{}}
+            result = {"result_version":"2.0", "status":"failed", "mathematical_status":"failed", "convergence_status":"not_run", "reason":"execution interrupted", "receipt":{}}
         if preserve_environment:
             try: manifest["engine_artifact"] = preserve(staging/"environment")
             except Exception as exc: manifest["environment_preservation_error"] = str(exc)
@@ -158,6 +158,7 @@ def execute(case, destination, input_images=(), *, preserve_environment=True):
                                       **{r["id"]:r["sha256"] for r in records}})
         receipt.setdefault("solver_version", ENGINE_VERSION)
         receipt.setdefault("case_version", raw.get("case_version") if isinstance(raw, Mapping) else None)
+        receipt.setdefault("runtime_ms", round((time.perf_counter()-started)*1000,3))
         result["provenance_receipt"] = copy.deepcopy(receipt)
         _write(staging/"result.json", result)
         _write(staging/"diagnostics.json", {"constraints":result.get("constraints", []), "conflicts":result.get("conflicts", []), "artifacts":artifact_refs})

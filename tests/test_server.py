@@ -190,6 +190,8 @@ class ServerTests(unittest.TestCase):
             self.assertTrue(page.get_by_text("Field lantern").is_visible())
             self.assertTrue(page.get_by_text("[prior] Hidden rear panel is inferred").is_visible())
             self.assertTrue(page.get_by_text("working seed: candidate_2").is_visible())
+            self.assertTrue(page.get_by_text("Reconstruction evidence", exact=True).is_visible())
+            self.assertTrue(page.get_by_text("Model-to-reference agreement", exact=True).is_visible())
             page.get_by_role("button", name="New run").click()
             self.assertTrue(page.get_by_text("Budget seconds").is_visible())
             browser.close()

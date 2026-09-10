@@ -16,6 +16,10 @@ def _signature(parameters, values, remove_scale=False):
     # Camera-frame geometry is invariant under simultaneous world-frame rigid gauges.
     r = Rotation.from_rotvec(camera["world_to_camera"]["rotation_vector"]).as_matrix()
     transformed = np.asarray(list(points.values())).reshape((-1,3)) @ r.T + camera["world_to_camera"]["translation"]
+    if camera["model"] == "orthographic" and len(transformed):
+        # Axial camera placement has no orthographic image consequence, but
+        # relative landmark depth remains part of the physical hypothesis.
+        transformed[:, 2] -= np.mean(transformed[:, 2])
     unit = max(float(np.linalg.norm(transformed)), 1e-12) if remove_scale else 1.0
     transformed /= unit
     intr = camera["intrinsics"]
@@ -82,7 +86,7 @@ def solve_validated(case):
             status = "invalid_geometry"
         elif conflict:
             status = "inconsistent"
-        elif ident["unresolved_count"] > ident["world_frame_gauge_count"] or not (reports or case["planes"]):
+        elif ident["unresolved_count"] > ident["world_frame_gauge_count"] + ident["projection_gauge_count"] or not (reports or case["planes"]):
             status = "underconstrained"
         else:
             status = "solved"
@@ -111,7 +115,14 @@ def solve_validated(case):
                 signature = _signature(parameters, fit.x, remove_scale)
                 branch_distances = [np.linalg.norm((signature-s)/(1+np.abs(s))) for s in signatures]
                 near = not branch_distances or int(np.argmin(branch_distances)) == index
-                if fit.success and near and (fitcam["model"] != "perspective" or np.all(z>1e-6)):
+                nominal = _signature(parameters, values, remove_scale)
+                displacement = np.linalg.norm((signature-nominal)/(1+np.abs(nominal)))
+                radius = settings['uncertainty_branch_radius']
+                separations = [np.linalg.norm((s-nominal)/(1+np.abs(nominal))) for j,s in enumerate(signatures) if j != index]
+                if separations: radius = min(radius, .45*min(separations))
+                near = near and displacement <= radius
+                feasible = not any(g.get('degenerate') for g in problem.reports(fit.x)) and all(g['status'] == 'satisfied' for g in problem.reports(fit.x, gauges=True))
+                if fit.success and near and feasible and (fitcam["model"] != "perspective" or np.all(z>1e-6)):
                     for item in case["measurements"]:
                         v = measurement(item, fitpoints)
                         if v is not None: samples[item["id"]].append(v)
@@ -121,6 +132,8 @@ def solve_validated(case):
                     item["uncertainty"] = {"available": True, "interval": np.quantile(vals,[.025,.975]).tolist(),
                                            "confidence": .95, "samples": len(vals), "requested_samples": count,
                                            "method": "seeded observation perturbation and conditional refitting", "conditional_on": CONDITIONAL}
+                elif item['status'] == 'resolved':
+                    item['uncertainty']['reason'] = 'Too few converged feasible refits stayed within the local hypothesis radius'
         elif not valid:
             for item in ms:
                 item["uncertainty"]["reason"] = "hypothesis is nonconverged, conflicting, or invalid"

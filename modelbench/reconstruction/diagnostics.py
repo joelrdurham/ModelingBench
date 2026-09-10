@@ -121,4 +121,6 @@ def write_artifacts(case, result, input_images, destination):
         draw.ellipse((a[0]-3,a[1]-3,a[0]+3,a[1]+3), outline="green", width=2)
     overlay.save(root/"reprojection.png")
     artifacts.append({"type": "reprojection", "image": "reprojection.png"})
+    for artifact in artifacts:
+        artifact["hypothesis_id"] = result.get("selected_hypothesis")
     return artifacts

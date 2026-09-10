@@ -278,12 +278,42 @@
       const audit = discoveryLedger.last_audit;
       if (audit) panel.append(el('p', 'Latest audit: ' + (audit.decision || 'recorded') + ' - ' + (audit.assessment || '')));
       node.append(panel);
+      const reconstructionPanel = el('details', undefined, 'finding');
+      reconstructionPanel.open = true;
+      reconstructionPanel.append(el('summary', 'Reconstruction evidence'));
+      for (const record of discoveryLedger.reconstructions || []) {
+        const solution = record.solution || {}, item = el('details');
+        item.append(el('summary', record.id + ': ' + (solution.mathematical_status || record.status || 'unassessed')));
+        item.append(el('p', 'Selected hypothesis: ' + (record.selected_hypothesis || 'historical / unavailable') + '; convergence: ' + (solution.convergence_status || 'unavailable')));
+        for (const [name, values] of [['Assumptions', solution.assumptions], ['Camera hypotheses', solution.camera_hypotheses], ['Measurements and conditional uncertainty', solution.measurements], ['Residuals and conflicts', solution.constraints], ['Unresolved degrees of freedom', solution.unresolved_degrees_of_freedom]]) {
+          const detail = el('details'); detail.append(el('summary', name), el('pre', JSON.stringify(values || [], null, 2))); item.append(detail);
+        }
+        for (const file of record.files || []) {
+          if (!file.path.endsWith('.png')) continue;
+          const evidence = {path: record.path + '/' + file.path};
+          if (evidenceAsset(evidence)) item.append(button('View ' + file.path.split('/').pop(), () => jumpToEvidence(evidence)));
+        }
+        reconstructionPanel.append(item);
+      }
+      if (!(discoveryLedger.reconstructions || []).length) reconstructionPanel.append(el('p', 'No reconstruction evidence required.'));
+      node.append(reconstructionPanel);
+      const modelPanel = el('details', undefined, 'finding'); modelPanel.open = true; modelPanel.append(el('summary', 'Model-to-reference agreement'));
+      for (const revision of run().review?.revisions || []) {
+        const fits = revision.evaluation?.reference_fit || {};
+        for (const [id, fit] of Object.entries(fits)) {
+          const detail = el('details'); detail.append(el('summary', revision.id + ' / ' + id + ': ' + (fit.assessment || 'unassessed')),
+            el('p', fit.reason || 'Candidate geometry evaluated under the approved fixed camera.'), el('pre', JSON.stringify(fit.metrics || {}, null, 2)));
+          for (const evidence of revision.evidence || []) if (evidence.kind === 'reference' && evidence.path.endsWith('.png') && evidenceAsset(evidence)) detail.append(button('View ' + evidence.path.split('/').pop(), () => jumpToEvidence(evidence)));
+          modelPanel.append(detail);
+        }
+      }
+      node.append(modelPanel);
     }
     const appendTask = (target, task) => {
       const detail = el('details', undefined, 'finding');
       if (task.status !== 'verifier_resolved') detail.classList.add('unresolved');
       const summary = el('summary'); summary.append(el('b', label(task.status), 'status-tag'), el('strong', task.requirement));
-      detail.append(summary, el('p', task.instruction || ''));
+      detail.append(summary, el('p', task.category === 'reconstruction_assumption' ? 'Reconstruction assumptions / unassessed comparison' : 'Model geometry'), el('p', task.instruction || ''));
       for (const evidence of [...(task.evidence || []), ...(task.history || [])]) {
         const row = el('div', undefined, 'evidence-row');
         if (evidenceAsset(evidence))

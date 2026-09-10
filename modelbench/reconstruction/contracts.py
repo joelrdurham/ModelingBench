@@ -14,7 +14,8 @@ ALIASES = {"point": "point_reprojection", "parallel": "parallelism",
            "perpendicular": "perpendicularity", "metric_segment": "distance"}
 DEFAULT_SETTINGS = {"seed": 0, "starts": 8, "max_nfev": 2000, "loss": "linear",
                     "f_scale": 1.0, "conflict_threshold": 3.0, "rank_rtol": 1e-7,
-                    "hypothesis_tolerance": 1e-4, "uncertainty_samples": 0}
+                    "hypothesis_tolerance": 1e-4, "uncertainty_samples": 0,
+                    "uncertainty_branch_radius": 0.25}
 
 
 class ReconstructionError(ValueError):
@@ -83,7 +84,7 @@ def parameter(value, name, size=None, positive_only=False):
     return out
 
 
-def validate_case(case):
+def _validate_case(case):
     if not isinstance(case, Mapping) or case.get("case_version") != CASE_VERSION:
         raise ReconstructionError("case must be an object with case_version '2.0'")
     data = copy.deepcopy(dict(case))
@@ -269,10 +270,20 @@ def validate_case(case):
     for key, lo, hi in (("seed",0,2**32-1),("starts",1,64),("max_nfev",1,100000),("uncertainty_samples",0,200)):
         if type(settings[key]) is not int or not lo <= settings[key] <= hi:
             raise ReconstructionError(f"solver.{key} must be an integer in [{lo}, {hi}]")
-    for key in ("f_scale", "conflict_threshold", "rank_rtol", "hypothesis_tolerance"):
+    for key in ("f_scale", "conflict_threshold", "rank_rtol", "hypothesis_tolerance", "uncertainty_branch_radius"):
         settings[key] = positive(settings[key], f"solver.{key}")
     if settings["loss"] not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
         raise ReconstructionError("unsupported robust loss")
     data["solver"] = settings
     data["unsupported_constraints"] = unsupported
     return data
+
+
+def validate_case(case):
+    """Public validator consistently reports malformed nested data as contract errors."""
+    try:
+        return _validate_case(case)
+    except ReconstructionError:
+        raise
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError, OverflowError) as exc:
+        raise ReconstructionError(f"malformed reconstruction case: {exc}") from exc

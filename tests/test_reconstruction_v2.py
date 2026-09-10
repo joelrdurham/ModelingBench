@@ -139,6 +139,23 @@ class EngineV2Tests(unittest.TestCase):
         self.assertAlmostEqual(result['camera']['intrinsics']['focal_length'],800,places=3)
         self.assertAlmostEqual(result['camera']['intrinsics']['principal_point'][0],613,places=3)
 
+    def test_gauge_equivalence_infeasibility_and_unobserved_depth(self):
+        result=solve(plane_unknown(True))
+        self.assertEqual(result['status'],'solved',result)
+        self.assertEqual(len(result['comparable_hypotheses']),1)
+        case=scene();case['constraints']=[{'id':'bad-gauge','type':'fixed_coordinate','role':'gauge','landmark_id':'p0','coordinates':[0,None,None]}]
+        self.assertEqual(solve(case)['status'],'invalid')
+        case=scene();case['solver']['starts']=1
+        case['landmarks'].append({'id':'unobserved','coordinates':[None,None,None],'initial':[0,0,-10]})
+        result=solve(case)
+        self.assertEqual(result['status'],'underconstrained',result)
+        self.assertGreater(result['landmark_depths']['unobserved'],0)
+
+    def test_nested_malformed_data_always_raises_contract_error(self):
+        for modify in (lambda c:c['images'][0].update(orientation=[]),lambda c:c.update(constraints=[{'id':'bad','type':[]}]),lambda c:c.update(planes=[{'id':'bad','rectification':None}]),lambda c:c.update(constraints=[{'id':'bad','type':'distance','assumption_ids':[[]]}])):
+            case=scene();modify(case)
+            with self.assertRaises(ReconstructionError):validate_case(case)
+
     def test_geometry_constraints_act_on_unknowns_and_degeneracy_is_reported(self):
         case=scene();case['observations']=[]
         case['landmarks']=[{'id':'a','coordinates':[0,0,0]},{'id':'b','coordinates':[1,0,0]},{'id':'c','coordinates':[0,1,0]},{'id':'d','coordinates':[None,1,None],'initial':[.3,1,.4]}]
@@ -161,6 +178,21 @@ class EngineV2Tests(unittest.TestCase):
         for point,obs in zip(case["landmarks"],case["observations"]):
             x,y,_=point["coordinates"];obs["image"]=[613+100*x,347+100*y]
         self.assertEqual(solve(case)["status"],"solved")
+
+    def test_orthographic_camera_recovery_separates_projection_gauge(self):
+        case=scene(True)
+        case['camera']['model']='orthographic'
+        case['camera']['intrinsics']={'scale':{'initial':80,'bounds':[50,150]},'principal_point':[613,347]}
+        case['solver']['starts']=6
+        for point,obs in zip(case['landmarks'],case['observations']):
+            x,y,_=point['coordinates'];obs['image']=[613+100*x,347+100*y]
+        result=solve(case)
+        self.assertEqual(result['status'],'solved',result)
+        self.assertAlmostEqual(result['camera']['intrinsics']['scale'],100,places=5)
+        self.assertEqual(len(result['comparable_hypotheses']),1)
+        self.assertEqual(result['unresolved_degrees_of_freedom']['projection_gauge_count'],1)
+        self.assertEqual(result['unresolved_degrees_of_freedom']['shape_or_camera_unresolved_count'],0)
+        self.assertFalse(result['camera']['translation_z_observable'])
 
     def test_rectifies_every_plane_and_rejects_degenerate_plane(self):
         case=scene();case["planes"]=[{"id":"front","landmarks":["p0","p1","p2","p3"],"output_scale":50},{"id":"second","plane_points":[[0,0],[2,0],[0,1],[2,1]],"image_points":[[10,20],[110,20],[10,70],[110,70]],"output_scale":40}]

@@ -115,7 +115,7 @@ def integrity(run_dir, revision=None):
     return artifact
 
 
-def add_task(run_dir, instruction, *, requirement='human-feedback', source='human', severity='error', evidence=None, task_id=None):
+def add_task(run_dir, instruction, *, requirement='human-feedback', source='human', severity='error', evidence=None, task_id=None, category='model_geometry'):
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValidationError('Task instruction must be nonempty')
     with lock(run_dir):
@@ -133,6 +133,7 @@ def add_task(run_dir, instruction, *, requirement='human-feedback', source='huma
                 task['history'].append({'at': utc_now(), 'type': 'reopened', 'evidence': evidence or []})
         else:
             task = {'id': stable_id, 'requirement': requirement, 'instruction': instruction.strip(), 'source': source,
+                    'category': category,
                     'severity': severity, 'status': 'open', 'evidence': evidence or [], 'responses': [],
                     'history': [{'at': utc_now(), 'type': 'opened'}]}
             value['tasks'].append(task)
@@ -206,8 +207,10 @@ def record_evaluation(run_dir, result):
         save(run_dir, value)
     for finding in result.get('checks', []):
         if finding.get('status') in {'fail', 'unknown'}:
-            add_task(run_dir, f"Correct {finding.get('requirement', finding['id'])}: expected {finding.get('expected')}, measured {finding.get('actual')}, tolerance {finding.get('tolerance')}, frame {finding.get('frame')}.",
+            prefix = 'Reassess reconstruction evidence for' if finding.get('category') == 'reconstruction_assumption' else 'Correct'
+            add_task(run_dir, f"{prefix} {finding.get('requirement', finding['id'])}: expected {finding.get('expected')}, measured {finding.get('actual')}, tolerance {finding.get('tolerance')}, frame {finding.get('frame')}.",
                      requirement=finding.get('requirement', finding['id']), source='measured',
+                     category=finding.get('category', 'model_geometry'),
                      evidence=[finding], task_id='measured_' + finding['id'])
 
 
@@ -390,9 +393,29 @@ def package(run_dir, destination):
     ledger = load(run_dir)
     sections = []
     for rev in ledger['revisions']:
-        images = [r for r in rev['evidence'] if r['path'].endswith('.png') and r['kind'] in {'diagnostics', 'final'}]
+        images = [r for r in rev['evidence'] if r['path'].endswith('.png') and r['kind'] in {'diagnostics', 'final', 'reference'}]
         links = ''.join('<a href="' + html.escape(r['path'], quote=True) + '"><img loading="lazy" src="' + html.escape(r['path'], quote=True) + '" alt="' + html.escape(r['path'], quote=True) + '"></a>' for r in images)
         sections.append('<section><h2>' + html.escape(rev['id']) + '</h2><p><a href="' + html.escape(rev['artifact'], quote=True) + '">Owned Blender artifact</a> ? ' + html.escape(rev['sha256']) + '</p><div class="images">' + links + '</div></section>')
+        if (rev.get('evaluation') or {}).get('reference_fit'):
+            sections.append('<details><summary>Model-to-reference agreement</summary><pre>' + html.escape(__import__('json').dumps(rev['evaluation']['reference_fit'], indent=2)) + '</pre></details>')
+    from .discovery import summary as discovery_summary
+    discovery = discovery_summary(run_dir)
+    if discovery and discovery.get('reconstructions'):
+        sections.append('<section><h2>Reconstruction evidence</h2>')
+        for record in discovery['reconstructions']:
+            for item in record.get('files', []):
+                relative = record['path'] + '/' + item['path']
+                source = resolve_within(run_dir, relative)
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            sections.append('<details><summary>' + html.escape(record['id']) + '</summary><pre>' + html.escape(__import__('json').dumps(record['solution'], indent=2)) + '</pre>')
+            for item in record.get('files', []):
+                if item['path'].endswith('.png'):
+                    url = record['path'] + '/' + item['path']
+                    sections.append('<a href="' + html.escape(url, quote=True) + '">' + html.escape(item['path']) + '</a> ')
+            sections.append('</details>')
+        sections.append('</section>')
     text = '<!doctype html><html lang="en"><meta charset="utf-8"><title>ModelingBench review package</title><style>body{font:16px system-ui;margin:3rem auto;max-width:1100px;padding:1rem;color:#252525;background:#f6f5f2}.images{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}img{width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}a:focus{outline:3px solid #397cba}</style><h1>Verified asset review</h1><p><a href="acceptance.json">Acceptance checklist</a> ? <a href="review.json">Findings and correction history</a> ? <a href="model-settings.json">Model settings and provenance</a> ? <a href="manifest.json">File hashes</a></p>' + ''.join(sections) + '<details><summary>Correction timeline</summary><pre>' + html.escape(__import__('json').dumps(ledger['tasks'], indent=2)) + '</pre></details></html>'
     (destination / 'index.html').write_text(text, encoding='utf-8')
     atomic_write_json(destination / 'manifest.json', {'version': 1, 'artifact_sha256': revision['sha256'], 'files': file_inventory(destination, exclude={'manifest.json'})})

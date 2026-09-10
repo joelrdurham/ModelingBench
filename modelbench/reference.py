@@ -6,47 +6,12 @@ import math
 import subprocess
 from pathlib import Path
 from .errors import StateError, ValidationError, BlenderError
-from .util import atomic_write_json, canonical_hash, file_inventory, read_json, sha256_file, resolve_within
+from .util import atomic_write_json, canonical_hash, read_json, sha256_file
 
 
 def solve_references(run_dir, spec, directory):
     from .reconstruction_bridge import solve_references as execute_references
     return execute_references(run_dir, spec, directory)
-
-
-def _legacy_solve_references(run_dir, spec, directory):
-    from .discovery import evidence_inventory
-    references = spec.get('references', [])
-    if not references: return []
-    from .reconstruction import solve
-    from .reconstruction.core import save_bundle
-    from PIL import Image, ImageOps
-    sources = {e['id']: e for e in evidence_inventory(run_dir)}
-    results = []
-    for index, reference in enumerate(references):
-        owned = sources[reference['evidence_id']]
-        path = resolve_within(run_dir, owned['local_path'])
-        folder = directory / ('reference_' + str(index + 1).zfill(4))
-        case = copy.deepcopy(reference['case'])
-        case['source_hashes'] = {reference['evidence_id']: owned['sha256']}
-        with Image.open(path) as image:
-            image = ImageOps.exif_transpose(image).convert('RGB')
-            original_size = image.size
-            crop = case.get('image_coordinates', {}).get('crop')
-            if crop:
-                x, y, w, h = crop
-                image = image.crop((round(x * image.width), round(y * image.height), round((x + w) * image.width), round((y + h) * image.height)))
-            folder.mkdir(parents=True, exist_ok=True)
-            image.save(folder / 'reference.png')
-            dimensions = list(image.size)
-        save_bundle(case, folder / 'case', [path])
-        solution = solve(case)
-        atomic_write_json(folder / 'solution.json', solution)
-        results.append({'id': reference['id'], 'evidence_id': reference['evidence_id'], 'source_sha256': owned['sha256'],
-            'status': solution['status'], 'solution': solution, 'size': dimensions, 'original_size': list(original_size),
-            'path': folder.relative_to(run_dir).as_posix(), 'files': file_inventory(folder)})
-    atomic_write_json(directory / 'index.json', results)
-    return results
 
 
 def _validate_files(run_dir, records):

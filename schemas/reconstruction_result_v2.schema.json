@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:modelbench:reconstruction:result:2.0",
+  "title": "Reconstruction result v2",
+  "type": "object",
+  "required": ["result_version", "status", "mathematical_status", "convergence_status", "receipt"],
+  "properties": {
+    "result_version": {"const": "2.0"},
+    "status": {"type": "string"},
+    "mathematical_status": {"enum": ["solved", "underconstrained", "ambiguous", "inconsistent", "indeterminate", "invalid_geometry", "invalid", "rectified", "failed"]},
+    "convergence_status": {"enum": ["converged", "not_converged", "infeasible_gauge", "not_run", "legacy_unavailable"]},
+    "camera": {"type": ["object", "null"]},
+    "camera_hypotheses": {"type": "array", "items": {"type": "object"}},
+    "measurements": {"type": "array", "items": {"type": "object", "required": ["id", "value", "status", "units", "uncertainty"], "properties": {"id": {"type": "string"}, "value": {"type": ["number", "null"]}, "conditional_value": {"type": ["number", "null"]}, "status": {"enum": ["resolved", "unresolved"]}, "units": {"type": "string"}, "uncertainty": {"type": "object", "required": ["available", "conditional_on"]}}}},
+    "constraints": {"type": "array"}, "conflicts": {"type": "array"}, "unsupported_constraints": {"type": "array"},
+    "rectifications": {"type": "array"}, "diagnostic_artifacts": {"type": "array"},
+    "receipt": {"type": "object", "required": ["engine_version", "implementation_sha256"], "properties": {"engine_version": {"type": "string"}, "implementation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "case_hash": {"type": ["string", "null"]}, "runtime_ms": {"type": "number", "minimum": 0}}}
+  }
+}

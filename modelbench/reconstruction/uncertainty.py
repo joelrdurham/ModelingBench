@@ -76,14 +76,29 @@ def analyze(problem, values):
         projection = nullspace.T @ (nullspace @ direction) if len(nullspace) else np.zeros(len(values))
         if np.linalg.norm(direction - projection) / norm < 1e-3:
             (scale if kind == "scale" else rigid).append(direction / norm)
-    rigid_rank = int(np.linalg.matrix_rank(np.asarray(rigid), tol=1e-5)) if rigid else 0
+    def basis_rank(directions):
+        return int(np.linalg.matrix_rank(np.asarray(directions), tol=1e-5)) if directions else 0
+    rigid_rank = basis_rank(rigid)
+    projection_gauges = []
+    # An orthographic camera's axial translation cannot affect any projection.
+    # Count only gauge directions independent of the world-frame gauges.
+    if problem.case["camera"]["model"] == "orthographic" and "camera.translation.2" in p.slots:
+        direction = np.zeros(len(values))
+        direction[p.slots["camera.translation.2"]] = 1.0
+        projected = nullspace.T @ (nullspace @ direction) if len(nullspace) else np.zeros(len(values))
+        if np.linalg.norm(direction - projected) < 1e-3:
+            projection_gauges.append(direction)
+    gauge_rank = basis_rank(rigid + projection_gauges)
+    projection_rank = gauge_rank - rigid_rank
+    scale_rank = basis_rank(rigid + projection_gauges + scale) - gauge_rank
     combos = []
     for vector in nullspace:
         leading = sorted(zip(p.names, vector.tolist()), key=lambda pair: abs(pair[1]), reverse=True)[:8]
         combos.append({name: value for name, value in leading if abs(value) > 1e-4})
     report = {"scaled_jacobian_rank": rank, "parameter_count": len(values), "singular_values": singular.tolist(),
               "unresolved_count": len(values)-rank, "world_frame_gauge_count": rigid_rank,
-              "missing_scale": bool(scale), "shape_or_camera_unresolved_count": max(0, len(values)-rank-rigid_rank-bool(scale)),
+              "projection_gauge_count": projection_rank,
+              "missing_scale": bool(scale_rank), "shape_or_camera_unresolved_count": max(0, len(values)-rank-gauge_rank-scale_rank),
               "parameter_combinations": combos, "numerical_gauge_is_evidence": False,
               "scope": "local linear analysis; multistart does not exhaust global solutions"}
     return report, nullspace
